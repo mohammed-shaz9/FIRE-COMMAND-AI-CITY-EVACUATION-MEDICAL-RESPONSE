@@ -1,7 +1,19 @@
 import { ENV } from "./env";
 
-// Google AI API key for Gemini (fallback when Forge key is not set)
-const GOOGLE_AI_KEY = process.env.GOOGLE_AI_KEY;
+// Google AI API key for Gemini (fallback when Forge key is not set) — read lazily so late-loaded env still works
+const googleAiKey = () => process.env.GOOGLE_AI_KEY;
+
+/** Parse JSON from an LLM reply, tolerating ```json fences and surrounding prose. */
+export function parseLLMJson<T = any>(content: unknown): T {
+  const raw = typeof content === "string" ? content : JSON.stringify(content);
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    const m = raw.match(/\{[\s\S]*\}/);
+    if (!m) throw new Error("LLM returned non-JSON content");
+    return JSON.parse(m[0]) as T;
+  }
+}
 
 export type Role = "system" | "user" | "assistant" | "tool" | "function";
 
@@ -225,7 +237,7 @@ const resolveApiUrl = () => {
 };
 
 const resolveApiKey = () => {
-  if (useGoogleAI()) return GOOGLE_AI_KEY;
+  if (useGoogleAI()) return googleAiKey()?.trim();
   return ENV.forgeApiKey;
 };
 
@@ -365,7 +377,7 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   } = params;
 
   const isGoogle = useGoogleAI();
-  const modelName = isGoogle ? 'gemini-2.0-flash' : 'gemini-2.5-flash';
+  const modelName = isGoogle ? (process.env.GEMINI_MODEL || 'gemini-2.0-flash') : 'gemini-2.5-flash';
 
   const payload: Record<string, unknown> = {
     model: modelName,
@@ -409,6 +421,7 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
       authorization: `Bearer ${resolveApiKey()}`,
     },
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(25_000), // a hung upstream must not stall the orchestration loop
   });
 
   if (!response.ok) {

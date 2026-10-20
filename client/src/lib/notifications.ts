@@ -17,7 +17,7 @@ export const requestNotificationPermission = async () => {
 };
 
 export const sendNotification = (title: string, options?: NotificationOptions) => {
-  if (Notification.permission === "granted") {
+  if (typeof Notification !== "undefined" && Notification.permission === "granted") {
     new Notification(title, {
       icon: "/logo.png", // Make sure this exists or use a generic icon
       badge: "/logo.png",

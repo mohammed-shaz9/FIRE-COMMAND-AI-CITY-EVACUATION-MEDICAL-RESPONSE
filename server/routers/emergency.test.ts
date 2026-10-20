@@ -83,7 +83,7 @@ describe("Emergency Router", () => {
 
       const routes = await caller.calculateEvacuationRoutes({ buildings });
       expect(Array.isArray(routes)).toBe(true);
-      expect(routes.length).toBe(buildings.length);
+      expect(routes.length).toBe(4 + buildings.length - 1);
 
       routes.forEach((route: any) => {
         expect(route).toHaveProperty("building");
@@ -101,7 +101,7 @@ describe("Emergency Router", () => {
       ];
 
       const routes = await caller.calculateEvacuationRoutes({ buildings });
-      expect(routes.length).toBe(1);
+      expect(routes.length).toBe(4);
       
       const route = routes[0];
       expect(route.path.length).toBeGreaterThan(0);

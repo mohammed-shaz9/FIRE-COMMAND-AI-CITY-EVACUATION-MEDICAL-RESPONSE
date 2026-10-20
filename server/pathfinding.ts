@@ -24,6 +24,17 @@ export class CampusPathfinder {
   private cellSize = 50; // 50 meters per cell
   private grid: GridCell[][] = [];
   private blockedZones: Array<{ x: number; y: number; radius: number }> = [];
+  // World coords span -250..250 (exits sit at +-250); grid cell 0 starts at -250.
+  private readonly origin = -250;
+
+  private cellIdx(v: number): number {
+    return Math.floor((v - this.origin) / this.cellSize);
+  }
+
+  private cellAt(p: Point): GridCell | undefined {
+    const c = (v: number) => Math.min(this.gridSize - 1, Math.max(0, this.cellIdx(v)));
+    return this.grid[c(p.x)]?.[c(p.y)];
+  }
 
   constructor() {
     this.initializeGrid();
@@ -85,8 +96,8 @@ export class CampusPathfinder {
         radius,
       });
 
-      const cellX = Math.floor(incident.locationX / this.cellSize);
-      const cellY = Math.floor(incident.locationY / this.cellSize);
+      const cellX = this.cellIdx(incident.locationX);
+      const cellY = this.cellIdx(incident.locationY);
 
       for (let dx = -radius; dx <= radius; dx++) {
         for (let dy = -radius; dy <= radius; dy++) {
@@ -126,12 +137,15 @@ export class CampusPathfinder {
   }
 
   public findPath(start: Point, goal: Point): Point[] {
-    const startCell = this.grid[Math.floor(start.x / this.cellSize)]?.[Math.floor(start.y / this.cellSize)];
-    const goalCell = this.grid[Math.floor(goal.x / this.cellSize)]?.[Math.floor(goal.y / this.cellSize)];
+    const startCell = this.cellAt(start);
+    const goalCell = this.cellAt(goal);
 
     if (!startCell || !goalCell || !goalCell.walkable) {
       return [start]; 
     }
+
+    // Reset per-search state (cells are shared; stale parents caused cyclic paths / infinite loops)
+    for (const row of this.grid) for (const c of row) { c.parent = null; c.gCost = 0; c.hCost = 0; c.fCost = 0; }
 
     const openSet: GridCell[] = [startCell];
     const closedSet: Set<GridCell> = new Set();
@@ -141,6 +155,7 @@ export class CampusPathfinder {
     startCell.fCost = startCell.hCost;
 
     const GRAVITY_FACTOR = 0.5;
+    const BLOCKED_PENALTY_S = 1000;
 
     while (openSet.length > 0) {
       let current = openSet[0];
@@ -163,7 +178,7 @@ export class CampusPathfinder {
       const neighbors = this.getNeighbors(current);
 
       for (const neighbor of neighbors) {
-        if (closedSet.has(neighbor) || !neighbor.walkable) {
+        if (closedSet.has(neighbor)) {
           continue;
         }
 
@@ -175,7 +190,8 @@ export class CampusPathfinder {
         // Penalize climbing
         const elevationCost = Math.abs(neighbor.elevation - current.elevation) * GRAVITY_FACTOR;
         
-        const tentativeGCost = current.gCost + traversalTime + elevationCost;
+        // ponytail: blocked cells are a heavy penalty, not a wall, so a start inside the hazard can still escape
+        const tentativeGCost = current.gCost + traversalTime + elevationCost + (neighbor.walkable ? 0 : BLOCKED_PENALTY_S);
 
         if (!openSet.includes(neighbor)) {
           openSet.push(neighbor);
@@ -228,13 +244,18 @@ export class CampusPathfinder {
 
     while (current !== null) {
       path.unshift({
-        x: current.x * this.cellSize + this.cellSize / 2,
-        y: current.y * this.cellSize + this.cellSize / 2,
+        x: current.x * this.cellSize + this.cellSize / 2 + this.origin,
+        y: current.y * this.cellSize + this.cellSize / 2 + this.origin,
       });
       current = current.parent;
     }
 
     return path;
+  }
+
+  /** Seconds to walk `pathLengthMeters` on flat ground. */
+  public calculateEvacuationTime(pathLengthMeters: number): number {
+    return pathLengthMeters / 1.4;
   }
 
   public getSafeExits(): Point[] {
@@ -254,70 +275,68 @@ export class CampusPathfinder {
     originY: number,
     heatmap?: Array<{ x: number; y: number; intensity: number }>
   ): Array<{ type: string; eta_min: number; path: Point[]; description: string }> {
-    const exits = this.getSafeExits();
     const origin = { x: originX, y: originY };
-
-    // 1. FASTEST — shortest time to any exit
-    let fastestPath: Point[] = [];
-    let fastestTime = Infinity;
-    let fastestExit = exits[0];
-    for (const exit of exits) {
+    // One A* per exit; every route type below is a different pick over the same candidates.
+    const cands = this.getSafeExits().map((exit) => {
       const path = this.findPath(origin, exit);
-      const time = this.estimatePathTime(path);
-      if (time < fastestTime) {
-        fastestTime = time;
-        fastestPath = path;
-        fastestExit = exit;
-      }
-    }
+      return { exit, path, time: this.estimatePathTime(path), maxSlope: this.maxAbsSlope(path) };
+    });
+    type Cand = (typeof cands)[number];
+    const reachable = cands.filter((c) => c.path.length >= 2);
+    const pick = (list: Cand[]): Cand | undefined => [...list].sort((a, b) => a.time - b.time)[0];
+    const none: Cand = { exit: cands[0].exit, path: [origin], time: Infinity, maxSlope: 0 };
 
-    // 2. SAFEST — furthest from heatmap danger
-    let safestPath = fastestPath;
-    let safestTime = fastestTime;
+    // 1. FASTEST: shortest time to any exit
+    const fastest = pick(reachable) ?? none;
+
+    // 2. SAFEST: highest mean clearance from the predicted fire heatmap
+    let safest = fastest;
     if (heatmap && heatmap.length > 0) {
       let maxSafety = -Infinity;
-      for (const exit of exits) {
-        const path = this.findPath(origin, exit);
-        // Calculate min distance from each path point to any heatmap cell
+      for (const c of reachable) {
         let safety = 0;
-        for (const p of path) {
+        for (const p of c.path) {
           let minDist = Infinity;
-          for (const h of heatmap) {
-            const d = Math.sqrt((p.x - h.x) ** 2 + (p.y - h.y) ** 2);
-            if (d < minDist) minDist = d;
-          }
+          for (const h of heatmap) minDist = Math.min(minDist, Math.hypot(p.x - h.x, p.y - h.y));
           safety += minDist;
         }
-        if (safety > maxSafety) {
-          maxSafety = safety;
-          safestPath = path;
-          safestTime = this.estimatePathTime(path);
-        }
+        safety /= c.path.length; // mean clearance, so longer paths aren't favoured just for having more points
+        if (safety > maxSafety) { maxSafety = safety; safest = c; }
       }
     }
 
-    // 3. ACCESSIBLE — avoid steep slopes (slope ≤ 5°)
-    // Use nearest exit (simple) with flat terrain preference
-    const accessiblePath = this.findPath(origin, exits[1]); // West exit (flatter terrain)
-    const accessibleTime = this.estimatePathTime(accessiblePath) * 1.3; // slower pace
+    // 3. ACCESSIBLE: gentlest steepest segment, ties broken by time. Slower pace (x1.3).
+    const accessible = [...reachable].sort((a, b) => a.maxSlope - b.maxSlope || a.time - b.time)[0] ?? none;
 
-    // 4. LOW CROWD — least congested (use exit furthest from origin, least popular)
-    const lowCrowdPath = this.findPath(origin, exits[3]); // South exit
-    const lowCrowdTime = this.estimatePathTime(lowCrowdPath);
+    // 4. LOW CROWD: fastest exit that the other three routes are NOT already sending people to.
+    const used = new Set([fastest, safest, accessible].map((c) => c.exit));
+    const lowCrowd = pick(reachable.filter((c) => !used.has(c.exit))) ?? pick(reachable.filter((c) => c.exit !== fastest.exit)) ?? fastest;
 
+    const eta = (t: number) => (Number.isFinite(t) ? Math.max(1, Math.ceil(t / 60)) : 0); // 0 = no route found
+    const slopeNote = (c: Cand) => `steepest segment ${c.maxSlope.toFixed(1)}°${c.maxSlope <= 5 ? ", wheelchair passable" : ", exceeds 5° wheelchair limit"}`;
     return [
-      { type: 'fastest', eta_min: Math.ceil(fastestTime / 60), path: fastestPath, description: `Direct route to North Assembly via shortest corridor` },
-      { type: 'safest', eta_min: Math.ceil(safestTime / 60), path: safestPath, description: `Route avoiding predicted fire spread zone` },
-      { type: 'accessible', eta_min: Math.ceil(accessibleTime / 60), path: accessiblePath, description: `Ramp-enabled route, slope ≤ 5°, wheelchair passable` },
-      { type: 'low_crowd', eta_min: Math.ceil(lowCrowdTime / 60), path: lowCrowdPath, description: `Least congested path via South Assembly` },
+      { type: 'fastest', eta_min: eta(fastest.time), path: fastest.path, description: `Direct route to Exit (${fastest.exit.x}, ${fastest.exit.y}) via shortest corridor` },
+      { type: 'safest', eta_min: eta(safest.time), path: safest.path, description: `Route avoiding predicted fire spread zone` },
+      { type: 'accessible', eta_min: eta(accessible.time * 1.3), path: accessible.path, description: `Gentlest-grade route to Exit (${accessible.exit.x}, ${accessible.exit.y}): ${slopeNote(accessible)}` },
+      { type: 'low_crowd', eta_min: eta(lowCrowd.time), path: lowCrowd.path, description: `Least congested: Exit (${lowCrowd.exit.x}, ${lowCrowd.exit.y}) is not used by the other routes when possible` },
     ];
   }
 
+  private maxAbsSlope(path: Point[]): number {
+    let m = 0;
+    for (let i = 1; i < path.length; i++) {
+      const a = this.cellAt(path[i - 1]), b = this.cellAt(path[i]);
+      if (a && b) m = Math.max(m, Math.abs(this.calculateSlope(a, b)));
+    }
+    return m;
+  }
+
   private estimatePathTime(path: Point[]): number {
+    if (path.length < 2) return Infinity; // findPath returns [start] when no route exists
     let totalSeconds = 0;
     for (let i = 1; i < path.length; i++) {
-      const cellA = this.grid[Math.floor(path[i - 1].x / this.cellSize)]?.[Math.floor(path[i - 1].y / this.cellSize)];
-      const cellB = this.grid[Math.floor(path[i].x / this.cellSize)]?.[Math.floor(path[i].y / this.cellSize)];
+      const cellA = this.cellAt(path[i - 1]);
+      const cellB = this.cellAt(path[i]);
       if (cellA && cellB) {
         const dist = this.distance(cellA, cellB) * this.cellSize;
         const slope = this.calculateSlope(cellA, cellB);
@@ -348,22 +367,13 @@ export class CampusPathfinder {
         exit
       );
 
-      let timeSeconds = 0;
-      for (let i = 1; i < path.length; i++) {
-        const cellA = this.grid[Math.floor(path[i-1].x / this.cellSize)]?.[Math.floor(path[i-1].y / this.cellSize)];
-        const cellB = this.grid[Math.floor(path[i].x / this.cellSize)]?.[Math.floor(path[i].y / this.cellSize)];
-        if(cellA && cellB) {
-           const physicalDistance = this.distance(cellA, cellB) * this.cellSize;
-           const slope = this.calculateSlope(cellA, cellB);
-           timeSeconds += physicalDistance / this.calculateMovementSpeed(slope);
-        }
-      }
+      const timeSeconds = this.estimatePathTime(path);
 
       routes.push({
         building: distressedBuilding.name,
         exit: `Exit (${exit.x}, ${exit.y})`,
         path,
-        timeSeconds: Math.ceil(timeSeconds),
+        timeSeconds: Number.isFinite(timeSeconds) ? Math.ceil(timeSeconds) : 0,
         priority: exit === exits[0] ? "primary" : "secondary"
       });
     }

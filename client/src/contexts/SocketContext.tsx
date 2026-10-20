@@ -36,19 +36,19 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     socketInstance.on("connect", () => {
       console.log("Connected to Socket.io server");
       setIsConnected(true);
-      requestNotificationPermission();
     });
 
     socketInstance.on("new_incident", (incident: any) => {
       console.log("New incident received via WebSocket:", incident);
-      toast.error(`NEW EMERGENCY: ${incident.type.toUpperCase()}`, {
-        description: `${incident.buildingName || "Unknown location"}: ${incident.description || "No details provided"}`,
+      const type = String(incident?.type ?? "incident").toUpperCase();
+      toast.error(`NEW EMERGENCY: ${type}`, {
+        description: `${incident?.buildingName || "Unknown location"}: ${incident?.description || "No details provided"}`,
         duration: 10000,
       });
 
-      sendNotification(`MRUH EMERGENCY: ${incident.type.toUpperCase()}`, {
-        body: `${incident.buildingName}: ${incident.description}`,
-        tag: incident.id.toString(),
+      sendNotification(`MRUH EMERGENCY: ${type}`, {
+        body: `${incident?.buildingName || "Unknown location"}: ${incident?.description || "No details provided"}`,
+        tag: String(incident?.id ?? Date.now()),
         requireInteraction: true,
       });
     });
@@ -56,7 +56,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     socketInstance.on("incident_resolved", (incidentId: string) => {
       console.log("Incident resolved via WebSocket:", incidentId);
       toast.success(`EMERGENCY RESOLVED`, {
-        description: `Incident #${incidentId} has been cleared.`,
+        description: incidentId === "ALL" ? "All incidents have been cleared." : `Incident #${incidentId} has been cleared.`,
       });
     });
 
@@ -65,7 +65,12 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setIsConnected(false);
     });
 
+    // Ask for notification permission on the first user gesture, not on connect (browsers ignore/penalise gesture-less prompts)
+    const askOnce = () => void requestNotificationPermission();
+    window.addEventListener("pointerdown", askOnce, { once: true });
+
     return () => {
+      window.removeEventListener("pointerdown", askOnce);
       socketInstance.disconnect();
     };
   }, []);

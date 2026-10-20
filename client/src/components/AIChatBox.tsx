@@ -181,7 +181,8 @@ export function AIChatBox({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // Skip while an IME (Telugu/Hindi input) is still composing.
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSubmit(e);
     }
@@ -316,11 +317,13 @@ export function AIChatBox({
           placeholder={placeholder}
           className="flex-1 max-h-32 resize-none min-h-9"
           rows={1}
+          aria-label="Message"
         />
         <Button
           type="submit"
           size="icon"
           disabled={!input.trim() || isLoading}
+          aria-label="Send message"
           className="shrink-0 h-[38px] w-[38px]"
         >
           {isLoading ? (

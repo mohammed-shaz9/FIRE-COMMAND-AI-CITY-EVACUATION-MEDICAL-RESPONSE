@@ -14,9 +14,10 @@ import {
   getFireCommandState as getState,
   setFireCommandState,
   clearFireCommandState,
+  resetSimulationEntities,
   FireCommandState,
 } from "../db";
-import { invokeLLM } from "../_core/llm";
+import { invokeLLM, parseLLMJson } from "../_core/llm";
 import { transcribeAudio } from "../_core/voiceTranscription";
 import { pathfinder } from "../pathfinding";
 import { broadcastIncident, broadcastResolution, broadcastAIDecision, broadcastFireCommand } from "../_core/socket";
@@ -28,11 +29,13 @@ export const emergencyRouter = router({
   // ========== FIRECOMMAND: TRIGGER ==========
   triggerFireCommand: publicProcedure
     .input(z.object({
-      zone: z.string().default("Engineering Block Floor 3"),
-      wind_direction_deg: z.number().default(0), // 0=North
-      wind_speed_mps: z.number().default(15),
+      zone: z.string().max(120).default("Engineering Block Floor 3"),
+      wind_direction_deg: z.number().min(0).max(360).default(0), // 0=North
+      wind_speed_mps: z.number().min(0).max(100).default(15),
     }))
     .mutation(async ({ input }) => {
+      resetSimulationEntities(); // fresh run: all units available, all vulnerable people 'safe'
+
       // Initialize full FireCommand state
       const state: FireCommandState = {
         incident_summary: {
@@ -95,10 +98,11 @@ export const emergencyRouter = router({
       setFireCommandState(state);
       broadcastFireCommand(state);
 
-      // Also create the incident in the DB
-      await createIncident({
-        type: 'fire',
-        severity: 'critical',
+      // Re-trigger replaces the previous run's incidents instead of stacking duplicates
+      await clearAllIncidents();
+      const incident = {
+        type: 'fire' as const,
+        severity: 'critical' as const,
         locationX: 0,
         locationY: 12,
         locationZ: 20,
@@ -106,7 +110,9 @@ export const emergencyRouter = router({
         description: 'FIRECOMMAND: Critical fire detected. Multi-agent orchestration initiated.',
         windDirection: state.predictions.wind.direction,
         windSpeed: input.wind_speed_mps,
-      });
+      };
+      const { insertId } = await createIncident(incident);
+      broadcastIncident({ id: insertId, ...incident });
 
       return { success: true, phase: 'DETECTING' };
     }),
@@ -119,6 +125,7 @@ export const emergencyRouter = router({
   // ========== FIRECOMMAND: RESET ==========
   resetFireCommand: publicProcedure.mutation(async () => {
     clearFireCommandState();
+    resetSimulationEntities();
     await clearAllIncidents();
     broadcastResolution("ALL");
     broadcastFireCommand(null);
@@ -146,9 +153,9 @@ export const emergencyRouter = router({
         locationX: z.number(),
         locationY: z.number(),
         locationZ: z.number(),
-        buildingName: z.string().optional(),
-        description: z.string().optional(),
-        windDirection: z.string().optional(),
+        buildingName: z.string().max(200).optional(),
+        description: z.string().max(1000).optional(),
+        windDirection: z.string().max(20).optional(),
         windSpeed: z.number().optional(),
       })
     )
@@ -218,7 +225,14 @@ export const emergencyRouter = router({
         } as any);
 
         const content = response.choices[0]?.message?.content;
-        const classified = JSON.parse(typeof content === 'string' ? content : JSON.stringify(content));
+        const raw = parseLLMJson(content);
+        // LLM output is untrusted: coerce to the incident enums
+        const classified = {
+          type: (["fire", "flood", "medical"] as const).includes(raw?.type) ? raw.type as "fire" | "flood" | "medical" : "other" as const,
+          severity: (["critical", "warning", "info"] as const).includes(raw?.severity) ? raw.severity as "critical" | "warning" | "info" : "warning" as const,
+          location: String(raw?.location ?? "").slice(0, 200),
+          description: String(raw?.description ?? transcriptText).slice(0, 1000),
+        };
 
         const locationMap: Record<string, [number, number, number]> = {
           "engineering block": [-50, 0, -50],
@@ -227,8 +241,9 @@ export const emergencyRouter = router({
           "medical center": [120, 0, 80],
         };
 
-        const locationKey = (classified.location || "").toLowerCase();
-        const [x, y, z] = locationMap[locationKey] || [0, 0, 0];
+        const locationKey = classified.location.toLowerCase();
+        const match = Object.keys(locationMap).find((k) => locationKey.includes(k));
+        const [x, y, z] = match ? locationMap[match] : [0, 0, 0];
 
         const incident = await createIncident({
           type: classified.type,
@@ -286,6 +301,10 @@ export const emergencyRouter = router({
     const zones = await getCampusZones();
     return zones.map((z) => ({ id: z.id, x: z.zoneX, y: z.zoneY, name: z.name, severity: "info" }));
   }),
+
+  getZoneSeverity: publicProcedure
+    .input(z.object({ zoneId: z.number() }))
+    .query(async ({ input }) => ({ severity: await getZoneSeverity(input.zoneId) })),
 
   calculateEvacuationRoutes: publicProcedure
     .input(z.object({ buildings: z.array(z.object({ name: z.string(), x: z.number(), y: z.number() })) }))

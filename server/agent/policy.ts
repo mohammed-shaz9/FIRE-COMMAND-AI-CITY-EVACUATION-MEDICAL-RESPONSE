@@ -1,4 +1,4 @@
-import { invokeLLM } from "../_core/llm";
+import { invokeLLM, parseLLMJson } from "../_core/llm";
 
 export interface PolicyBrief {
   title: string;
@@ -11,6 +11,27 @@ export interface PolicyBrief {
  * Generates Urban Policy Briefs based on current simulation metrics
  */
 export async function generatePolicyBrief(metrics: {
+  waste: number;
+  transit: number;
+  density: number;
+}): Promise<PolicyBrief> {
+  try {
+    return await llmPolicyBrief(metrics);
+  } catch (err) {
+    console.warn("[Policy] LLM unavailable, using template brief:", (err as Error).message);
+    // Lowest-performing metric (density is "stress": lower is better only when low, so treat 100-density as health)
+    const health = { waste: metrics.waste, transit: metrics.transit, density: 100 - metrics.density };
+    const worst = (Object.keys(health) as Array<keyof typeof health>).sort((a, b) => health[a] - health[b])[0];
+    const text = {
+      waste: ["Smart Waste Routing", "Deploy IoT fill-level sensors and dynamic collection routes to lift waste efficiency.", "SDG 11.6"],
+      transit: ["Adaptive Transit Flow", "Use real-time demand signals to retime shuttles and reduce congestion on campus corridors.", "SDG 11.2"],
+      density: ["Occupancy Balancing", "Rebalance housing allocation and stagger usage to relieve density stress.", "SDG 11.1"],
+    }[worst];
+    return { title: text[0], recommendation: text[1], targetSDG: text[2], impactEstimate: "Estimated 10-15% improvement (template, AI unavailable)" };
+  }
+}
+
+async function llmPolicyBrief(metrics: {
   waste: number;
   transit: number;
   density: number;
@@ -55,6 +76,5 @@ Return valid JSON with keys: title, recommendation, targetSDG, impactEstimate.`;
   const content = response.choices[0]?.message?.content;
   if (!content) throw new Error("No response from LLM");
 
-  const contentStr = typeof content === "string" ? content : JSON.stringify(content);
-  return JSON.parse(contentStr) as PolicyBrief;
+  return parseLLMJson<PolicyBrief>(content);
 }

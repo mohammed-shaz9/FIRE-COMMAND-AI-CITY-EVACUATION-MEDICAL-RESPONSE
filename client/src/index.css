@@ -42,6 +42,21 @@
   --color-sidebar-ring: var(--sidebar-ring);
 }
 
+/* FireCommand design tokens: dark emergency-command language.
+   Use as bg-fc-panel, text-fc-cyan, border-fc-red/30 etc. */
+@theme {
+  --color-fc-bg: #020617;
+  --color-fc-panel: #010613;
+  --color-fc-cyan: #0dccf2;
+  --color-fc-red: #ff003c;
+  --color-fc-green: #00ffaa;
+  --color-fc-amber: #ff9900;
+  --color-fc-violet: #a855f7;
+  --font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+
 :root {
   --primary: var(--color-blue-700);
   --primary-foreground: var(--color-blue-50);
@@ -79,8 +94,8 @@
 }
 
 .dark {
-  --primary: var(--color-blue-700);
-  --primary-foreground: var(--color-blue-50);
+  --primary: #0dccf2;
+  --primary-foreground: #020617;
   --sidebar-primary: var(--color-blue-500);
   --sidebar-primary-foreground: var(--color-blue-50);
   --background: oklch(0.141 0.005 285.823);
@@ -99,7 +114,7 @@
   --destructive-foreground: oklch(0.985 0 0);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.488 0.243 264.376);
+  --ring: #0dccf2;
   --chart-1: var(--color-blue-300);
   --chart-2: var(--color-blue-500);
   --chart-3: var(--color-blue-600);
@@ -123,9 +138,20 @@
     @apply border-border outline-ring/50;
   }
 
+  html {
+    scroll-behavior: smooth;
+    scroll-padding-top: 5rem;
+  }
+
   body {
     @apply bg-background text-foreground;
     font-family: 'Inter', system-ui, sans-serif;
+    overflow-x: hidden;
+  }
+
+  :focus-visible {
+    outline: 2px solid #0dccf2;
+    outline-offset: 2px;
   }
 
   button:not(:disabled),
@@ -314,9 +340,9 @@
     left: 0;
     bottom: 0;
     right: 0;
-    background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+    background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.12) 50%);
     z-index: 9999;
-    background-size: 100% 2px, 3px 100%;
+    background-size: 100% 3px;
     pointer-events: none;
   }
 
@@ -333,9 +359,12 @@
   h1,
   h2,
   h3,
-  h4,
+  h4 {
+    font-family: var(--font-display);
+  }
+
   .cyber-text {
-    font-family: 'Space Grotesk', 'Courier New', Courier, monospace;
+    font-family: var(--font-display);
     text-transform: uppercase;
     color: var(--accent-color);
   }
@@ -443,4 +472,66 @@
 .glitch-text {
   animation: glitch 3s infinite;
   text-shadow: 2px 0 #0dccf2, -2px 0 #ff003c;
+}
+/* ---- FireCommand landing + shared motion utilities ---- */
+
+.fc-hero-bg {
+  background-image:
+    radial-gradient(60rem 28rem at 15% -10%, rgba(255, 0, 60, 0.16), transparent 60%),
+    radial-gradient(50rem 26rem at 90% 10%, rgba(13, 204, 242, 0.14), transparent 60%);
+}
+
+.fc-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.reveal {
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+.reveal.is-in {
+  opacity: 1;
+  transform: none;
+}
+
+@keyframes fc-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+.fc-caret::after {
+  content: "";
+  display: inline-block;
+  width: 0.5ch;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  background: #0dccf2;
+  animation: fc-caret 1s steps(1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .reveal {
+    opacity: 1;
+    transform: none;
+  }
 }

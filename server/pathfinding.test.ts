@@ -84,7 +84,7 @@ describe("CampusPathfinder", () => {
       const incidents = [];
       const routes = pathfinder.calculateAllEvacuationRoutes(buildings, incidents);
 
-      expect(routes.length).toBe(buildings.length);
+      expect(routes.length).toBe(4 + buildings.length - 1);
       routes.forEach(route => {
         expect(route).toHaveProperty("building");
         expect(route).toHaveProperty("exit");
@@ -107,7 +107,7 @@ describe("CampusPathfinder", () => {
 
       const routes = pathfinder.calculateAllEvacuationRoutes(buildings, incidents);
       
-      expect(routes.length).toBe(buildings.length);
+      expect(routes.length).toBe(4 + buildings.length - 1);
       routes.forEach(route => {
         expect(route).toHaveProperty("building");
         expect(route).toHaveProperty("exit");
@@ -132,8 +132,8 @@ describe("CampusPathfinder", () => {
       const fireRoutes = pathfinder.calculateAllEvacuationRoutes(buildings, fireIncidents);
       const floodRoutes = pathfinder.calculateAllEvacuationRoutes(buildings, floodIncidents);
 
-      expect(fireRoutes.length).toBe(1);
-      expect(floodRoutes.length).toBe(1);
+      expect(fireRoutes.length).toBe(4);
+      expect(floodRoutes.length).toBe(4);
       expect(fireRoutes[0]).toHaveProperty("timeSeconds");
       expect(floodRoutes[0]).toHaveProperty("timeSeconds");
     });

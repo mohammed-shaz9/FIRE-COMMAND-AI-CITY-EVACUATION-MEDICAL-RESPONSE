@@ -26,16 +26,32 @@ export interface SpreadResult {
 const GRID_SIZE = 60;
 const CELL_SIZE_M = 5; // 5 meters per cell = 300m campus
 
-// Direction labels from degrees
+// Direction labels from degrees (normalised so negative / >=360 / NaN inputs can't index out of range)
 function degToLabel(deg: number): string {
   const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
-  return dirs[Math.round(deg / 45) % 8];
+  const d = Number.isFinite(deg) ? ((deg % 360) + 360) % 360 : 0;
+  return dirs[Math.round(d / 45) % 8];
 }
 
 // Opposite direction (where fire spreads TO)
 function oppositeDir(deg: number): string {
-  return degToLabel((deg + 180) % 360);
+  return degToLabel((Number.isFinite(deg) ? deg : 0) + 180);
 }
+
+// Barrier zones (roads, open ground) — hardcoded for MRUH campus. Precomputed once.
+const BARRIER: Uint8Array = (() => {
+  const barriers = [
+    { x: 30, y: 20, r: 3 }, // Main road
+    { x: 30, y: 40, r: 3 }, // Secondary road
+  ];
+  const m = new Uint8Array(GRID_SIZE * GRID_SIZE);
+  for (let x = 0; x < GRID_SIZE; x++)
+    for (let y = 0; y < GRID_SIZE; y++)
+      if (barriers.some(b => Math.hypot(x - b.x, y - b.y) < b.r)) m[x * GRID_SIZE + y] = 1;
+  return m;
+})();
+
+const num = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
 
 /**
  * Run a cellular automata fire spread for T steps.
@@ -49,89 +65,70 @@ export function simulateSpread(
   terrain: number[][] | null, // elevation grid, optional
   steps: number = 20 // each step = ~1 minute
 ): SpreadResult {
-  // Initialize grid
-  const grid: number[][] = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(0));
-  const timeGrid: number[][] = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(-1));
+  const N = GRID_SIZE;
+  const windDeg = num(wind?.direction_deg, 0);
+  const windSpeed = Math.max(0, num(wind?.speed_mps, 0));
+  steps = Math.min(200, Math.max(0, Math.floor(num(steps, 20))));
+
+  // Flat double buffers (no per-step allocation)
+  let cur = new Float64Array(N * N);
+  let next = new Float64Array(N * N);
+  const timeGrid = new Int16Array(N * N).fill(-1);
 
   // Map world coords to grid coords
-  const cx = Math.min(GRID_SIZE - 1, Math.max(0, Math.floor((ignitionX + 150) / CELL_SIZE_M)));
-  const cy = Math.min(GRID_SIZE - 1, Math.max(0, Math.floor((ignitionY + 150) / CELL_SIZE_M)));
+  const clampCell = (v: number) => Math.min(N - 1, Math.max(0, Math.floor((num(v, 0) + 150) / CELL_SIZE_M)));
+  const cx = clampCell(ignitionX);
+  const cy = clampCell(ignitionY);
 
   // Ignite origin
-  grid[cx][cy] = 1.0;
-  timeGrid[cx][cy] = 0;
+  cur[cx * N + cy] = 1.0;
+  timeGrid[cx * N + cy] = 0;
 
   // Wind vector (wind blows FROM direction_deg, fire spreads OPPOSITE)
-  const windRad = ((wind.direction_deg + 180) % 360) * (Math.PI / 180);
-  const windDx = Math.sin(windRad) * (wind.speed_mps / 10); // normalized
-  const windDy = -Math.cos(windRad) * (wind.speed_mps / 10);
+  const windRad = ((windDeg + 180) % 360) * (Math.PI / 180);
+  const windDx = Math.sin(windRad) * (windSpeed / 10); // normalized
+  const windDy = -Math.cos(windRad) * (windSpeed / 10);
 
-  // Barrier zones (roads, open ground) — hardcoded for MRUH campus
-  const barriers: Array<{ x: number; y: number; r: number }> = [
-    { x: 30, y: 20, r: 3 }, // Main road
-    { x: 30, y: 40, r: 3 }, // Secondary road
-  ];
+  // Per-direction base rate (wind boosts downwind, reduces upwind) — constant across cells
+  const DX = [-1, -1, -1, 0, 0, 1, 1, 1];
+  const DY = [-1, 0, 1, -1, 1, -1, 0, 1];
+  const dirRate = DX.map((dx, i) => 0.15 + (dx * windDx + DY[i] * windDy) * 0.25);
+  const dirMul = DX.map((dx, i) => (dx !== 0 && DY[i] !== 0 ? 0.7 : 1)); // diagonal penalty
 
-  function isBarrier(x: number, y: number): boolean {
-    return barriers.some(b => Math.sqrt((x - b.x) ** 2 + (y - b.y) ** 2) < b.r);
-  }
-
-  // Simulate steps
   for (let t = 1; t <= steps; t++) {
-    const newGrid = grid.map(row => [...row]);
+    next.set(cur);
 
-    for (let x = 1; x < GRID_SIZE - 1; x++) {
-      for (let y = 1; y < GRID_SIZE - 1; y++) {
-        if (grid[x][y] < 0.1) continue; // Not burning
-        if (isBarrier(x, y)) continue;
+    for (let x = 0; x < N; x++) {
+      for (let y = 0; y < N; y++) {
+        const i = x * N + y;
+        const src = cur[i];
+        if (src < 0.1) continue; // Not burning
+        if (BARRIER[i]) continue;
 
-        // Spread to neighbors
-        for (let dx = -1; dx <= 1; dx++) {
-          for (let dy = -1; dy <= 1; dy++) {
-            if (dx === 0 && dy === 0) continue;
-            const nx = x + dx;
-            const ny = y + dy;
-            if (nx < 0 || nx >= GRID_SIZE || ny < 0 || ny >= GRID_SIZE) continue;
-            if (isBarrier(nx, ny)) continue;
+        for (let d = 0; d < 8; d++) {
+          const nx = x + DX[d];
+          const ny = y + DY[d];
+          if (nx < 0 || nx >= N || ny < 0 || ny >= N) continue;
+          const j = nx * N + ny;
+          if (BARRIER[j]) continue;
 
-            // Base spread rate
-            let spreadRate = 0.15;
+          let rate = dirRate[d];
+          // Slope factor (fire spreads faster uphill)
+          if (terrain) rate += Math.max(0, ((terrain[nx]?.[ny] ?? 0) - (terrain[x]?.[y] ?? 0)) * 0.02);
+          rate = Math.max(0, Math.min(1, rate * dirMul[d]));
 
-            // Wind factor: boost in wind direction, reduce against
-            const dotProduct = dx * windDx + dy * windDy;
-            spreadRate += dotProduct * 0.25;
-
-            // Slope factor (fire spreads faster uphill)
-            if (terrain) {
-              const slopeBoost = ((terrain[nx]?.[ny] ?? 0) - (terrain[x]?.[y] ?? 0)) * 0.02;
-              spreadRate += Math.max(0, slopeBoost);
-            }
-
-            // Diagonal penalty
-            if (dx !== 0 && dy !== 0) spreadRate *= 0.7;
-
-            // Apply
-            spreadRate = Math.max(0, Math.min(1, spreadRate));
-            const newIntensity = Math.min(1, newGrid[nx][ny] + grid[x][y] * spreadRate);
-
-            if (newIntensity > newGrid[nx][ny]) {
-              newGrid[nx][ny] = newIntensity;
-              if (timeGrid[nx][ny] < 0) {
-                timeGrid[nx][ny] = t;
-              }
-            }
+          const v = Math.min(1, next[j] + src * rate);
+          if (v > next[j]) {
+            next[j] = v;
+            if (timeGrid[j] < 0) timeGrid[j] = t;
           }
         }
       }
     }
-
-    // Copy back
-    for (let x = 0; x < GRID_SIZE; x++) {
-      for (let y = 0; y < GRID_SIZE; y++) {
-        grid[x][y] = newGrid[x][y];
-      }
-    }
+    [cur, next] = [next, cur];
   }
+
+  const grid: number[][] = Array.from({ length: N }, (_, x) => Array.from(cur.subarray(x * N, (x + 1) * N)));
 
   // Build heatmap cells (only cells with intensity > 0.05)
   const heatmap: SpreadCell[] = [];
@@ -142,7 +139,7 @@ export function simulateSpread(
           x: x * CELL_SIZE_M - 150,
           y: y * CELL_SIZE_M - 150,
           intensity: Math.round(grid[x][y] * 100) / 100,
-          timeToReach: timeGrid[x][y] >= 0 ? timeGrid[x][y] * 60 : -1, // seconds
+          timeToReach: timeGrid[x * GRID_SIZE + y] >= 0 ? timeGrid[x * GRID_SIZE + y] * 60 : -1, // seconds
         });
       }
     }
@@ -152,14 +149,15 @@ export function simulateSpread(
   let evacWindowSteps = steps;
   for (let x = 0; x < GRID_SIZE; x++) {
     for (let y = 25; y <= 35; y++) {
-      if (timeGrid[x][y] > 0 && timeGrid[x][y] < evacWindowSteps) {
-        evacWindowSteps = timeGrid[x][y];
+      const tg = timeGrid[x * GRID_SIZE + y];
+      if (tg > 0 && tg < evacWindowSteps) {
+        evacWindowSteps = tg;
       }
     }
   }
 
   return {
-    spread_direction: oppositeDir(wind.direction_deg),
+    spread_direction: oppositeDir(windDeg),
     evac_window_minutes: Math.max(1, evacWindowSteps),
     heatmap,
     grid,

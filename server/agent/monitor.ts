@@ -12,20 +12,43 @@ import { agentSensorFusion, agentSpreadPredictor, agentEvacuationPlanner, agentV
 
 let _tickCount = 0;
 let _spreadStep = 0;
+let _heatmap: Array<{ x: number; y: number; intensity: number }> = [];
 let _agentLog: Array<{ agent: string; phase: string; result: any; timestamp: number }> = [];
 
 export function getAgentLog() {
   return _agentLog;
 }
 
+let _timer: ReturnType<typeof setInterval> | null = null;
+let _busy = false; // ticks are async (LLM calls can exceed the 2s interval) — never run two at once
+let _lastState: FireCommandState | null = null;
+
+export function stopMonitorLoop() {
+  if (_timer) clearInterval(_timer);
+  _timer = null;
+}
+
+// LLM output is untrusted: coerce to a sane finite number
+const finite = (v: unknown, fallback: number, min = -Infinity, max = Infinity) =>
+  typeof v === "number" && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;
+
 export function startMonitorLoop() {
+  if (_timer) return; // idempotent: no duplicate loops
   console.log("[FireCommand] Starting AI Agent orchestration loop...");
 
-  setInterval(async () => {
+  _timer = setInterval(async () => {
+    if (_busy) return;
+    _busy = true;
     try {
       const state = getFireCommandState();
       if (!state || state.phase === 'IDLE' || state.phase === 'COMPLETE') {
         return;
+      }
+      // New incident (trigger/reset replaced the state object) -> reset per-run counters
+      if (state !== _lastState) {
+        _lastState = state;
+        _tickCount = 0;
+        _spreadStep = 0;
       }
 
       _tickCount++;
@@ -44,8 +67,8 @@ export function startMonitorLoop() {
             cctv_alert: true,
           });
 
-          state.incident_summary.confirmed = sensorResult.confirmed;
-          state.incident_summary.confidence = sensorResult.confidence;
+          state.incident_summary.confirmed = Boolean(sensorResult.confirmed);
+          state.incident_summary.confidence = finite(sensorResult.confidence, 0.95, 0, 1);
 
           state.agent_log.push({
             agent: "SensorFusion",
@@ -80,8 +103,9 @@ export function startMonitorLoop() {
         };
         const spreadResult = simulateSpread(0, 20, wind, null, _spreadStep);
 
+        _heatmap = spreadResult.heatmap.slice().sort((a, b) => b.intensity - a.intensity).slice(0, 200);
         broadcastSpreadUpdate({
-          heatmap: spreadResult.heatmap.slice(0, 200),
+          heatmap: _heatmap,
           evac_window: spreadResult.evac_window_minutes,
           spread_direction: spreadResult.spread_direction,
           step: _spreadStep,
@@ -100,8 +124,8 @@ export function startMonitorLoop() {
               terrain: "Flat campus with mild slope (Engineering Block lower, Science Block higher)",
             });
 
-            state.predictions.spread_direction = spreadAI.spread_direction;
-            state.predictions.evac_window_minutes = spreadAI.evac_window_minutes;
+            state.predictions.spread_direction = String(spreadAI.spread_direction || spreadResult.spread_direction);
+            state.predictions.evac_window_minutes = finite(spreadAI.evac_window_minutes, spreadResult.evac_window_minutes, 1, 120);
 
             state.agent_log.push({
               agent: "SpreadPredictor",
@@ -130,7 +154,7 @@ export function startMonitorLoop() {
       else if (state.phase === 'ROUTING') {
         const start = Date.now();
         // Compute routes with pathfinder
-        const routes = pathfinder.compute4Routes(0, 20);
+        const routes = pathfinder.compute4Routes(0, 20, _heatmap);
 
         console.log("[FireCommand] 🤖 Agent: EvacuationPlanner strategizing 4 routes...");
 
@@ -145,9 +169,9 @@ export function startMonitorLoop() {
 
           // Merge AI priorities with computed routes
           state.evacuation.routes = evacPlan.route_priorities.map((rp, i) => ({
-            type: rp.type,
-            eta_min: rp.eta_min,
-            description: rp.reasoning,
+            type: String(rp.type),
+            eta_min: finite(rp.eta_min, routes[i]?.eta_min || 3, 0, 120),
+            description: String(rp.reasoning ?? ""),
           }));
 
           state.agent_log.push({
@@ -242,7 +266,7 @@ export function startMonitorLoop() {
             state.resources.ambulances_dispatched.push({
               id: ambulances[i].id,
               name: ambulances[i].name,
-              target_zone: allocation.ambulance_assignments[i]?.target_zone || 'North Assembly Point',
+              target_zone: allocation.ambulance_assignments?.[i]?.target_zone || 'North Assembly Point',
               eta_minutes: 3 + Math.floor(Math.random() * 4),
               status: 'en_route',
             });
@@ -264,7 +288,7 @@ export function startMonitorLoop() {
             state.resources.medical_teams_dispatched.push({
               id: medKits[i].id,
               name: `MED_TEAM_${medKits[i].id}`,
-              target_zone: allocation.medical_team_assignments[i]?.target_zone || 'Assembly Point',
+              target_zone: allocation.medical_team_assignments?.[i]?.target_zone || 'Assembly Point',
               status: 'deployed',
             });
           }
@@ -375,7 +399,7 @@ export function startMonitorLoop() {
         state.health_ops.triage_summary = { green: evacuatedCount, yellow: evacuatingCount, red: atRiskCount };
 
         // SDG 03: Vitals score
-        state.sdg_scores.sdg03 = Math.min(100, 40 + Math.round((evacuatedCount / vulnerable.length) * 60));
+        state.sdg_scores.sdg03 = vulnerable.length ? Math.min(100, 40 + Math.round((evacuatedCount / vulnerable.length) * 60)) : 100;
         // SDG 13: Finalizing score
         state.sdg_scores.sdg13 = 100;
         state.sdg_scores.combined = Math.round((state.sdg_scores.sdg11 + state.sdg_scores.sdg13 + state.sdg_scores.sdg03) / 3);
@@ -406,12 +430,17 @@ export function startMonitorLoop() {
         }
       }
 
+      // State was reset/replaced while we were awaiting an agent: drop this stale tick
+      if (getFireCommandState() !== state) return;
+
       // Broadcast full state to all clients
       setFireCommandState(state);
       broadcastFireCommand(state);
 
     } catch (error) {
       console.error("[FireCommand] Orchestration error:", error);
+    } finally {
+      _busy = false;
     }
   }, 2000); // 2-second tick
 }

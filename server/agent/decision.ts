@@ -1,4 +1,4 @@
-import { invokeLLM } from "../_core/llm";
+import { invokeLLM, parseLLMJson } from "../_core/llm";
 import { RetrievedKnowledge } from "./rag";
 
 export interface DecisionResult {
@@ -7,10 +7,36 @@ export interface DecisionResult {
   reasoning: string;
 }
 
+const ACTIONS: DecisionResult["action"][] = ["evacuate", "shelter", "medical", "rescue", "optimize_transit", "reoute_waste", "manage_density"];
+const PRIORITIES: DecisionResult["priority"][] = ["critical", "warning", "info"];
+
+/** Rule-based decision used when the LLM is unavailable (no API key / network / bad output). */
+function heuristicDecision(incident: any): DecisionResult {
+  const t = incident?.type;
+  const action = t === "medical" ? "medical" : t === "flood" ? "shelter" : t === "fire" || t === "earthquake" ? "evacuate" : "rescue";
+  const priority = PRIORITIES.includes(incident?.severity) ? incident.severity : "warning";
+  return { action, priority, reasoning: `Rule-based fallback (AI unavailable): ${t ?? "unknown"} incident at ${priority} priority -> ${action}.` };
+}
+
 /**
  * Intelligent Decision Maker for SDG 11 Urban Resilience
+ * Never throws: degrades to a rule-based decision.
  */
 export async function makeDecision(
+  incident: any,
+  knowledge: RetrievedKnowledge
+): Promise<DecisionResult> {
+  try {
+    const d = await llmDecision(incident, knowledge);
+    if (!ACTIONS.includes(d?.action) || !PRIORITIES.includes(d?.priority)) throw new Error("Invalid LLM decision");
+    return { ...d, reasoning: String(d.reasoning ?? "") };
+  } catch (err) {
+    console.warn("[Decision] LLM unavailable, using heuristic:", (err as Error).message);
+    return heuristicDecision(incident);
+  }
+}
+
+async function llmDecision(
   incident: any,
   knowledge: RetrievedKnowledge
 ): Promise<DecisionResult> {
@@ -64,6 +90,5 @@ Return valid JSON.`;
   const content = response.choices[0]?.message?.content;
   if (!content) throw new Error("No response from LLM");
 
-  const contentStr = typeof content === "string" ? content : JSON.stringify(content);
-  return JSON.parse(contentStr) as DecisionResult;
+  return parseLLMJson<DecisionResult>(content);
 }

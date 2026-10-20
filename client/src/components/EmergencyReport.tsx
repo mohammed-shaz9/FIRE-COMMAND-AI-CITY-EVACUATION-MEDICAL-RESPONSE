@@ -1,9 +1,10 @@
-import React, { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Mic, MicOff, Loader2, MapPin } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 
 export function EmergencyReport() {
   const [isRecording, setIsRecording] = useState(false);
@@ -17,9 +18,22 @@ export function EmergencyReport() {
   const utils = trpc.useUtils();
 
   // Auto-detect location on mount
-  React.useEffect(() => {
+  useEffect(() => {
     detectLocation();
   }, []);
+
+  // Release the microphone if the component unmounts mid-recording.
+  useEffect(
+    () => () => {
+      const rec = mediaRecorderRef.current;
+      if (rec && rec.state !== "inactive") {
+        rec.onstop = null;
+        rec.stop();
+      }
+      rec?.stream.getTracks().forEach(t => t.stop());
+    },
+    []
+  );
 
   const detectLocation = () => {
     setLocation("Detecting...");
@@ -27,17 +41,17 @@ export function EmergencyReport() {
       navigator.geolocation.getCurrentPosition(
         (position) => {
           const { latitude, longitude } = position.coords;
-          // Simplified mapping: in a real app, use reverse geocoding or building polygons
-          // For MRUH campus, we'll just show the coords for now or mock building
-          setLocation(`${latitude.toFixed(4)}, ${longitude.toFixed(4)} (Engineering Block)`);
+          // Coordinates only: no building lookup exists, so do not claim one.
+          setLocation(`${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
         },
         (error) => {
           console.error("Location error:", error);
-          setLocation("Unknown (Manual select)");
-        }
+          setLocation("Unavailable");
+        },
+        { timeout: 10000 }
       );
     } else {
-      setLocation("Unsupported (Manual select)");
+      setLocation("Unsupported");
     }
   };
 
@@ -82,7 +96,8 @@ export function EmergencyReport() {
       // 1. Convert blob to base64
       const reader = new FileReader();
       reader.readAsDataURL(blob);
-      const base64Promise = new Promise<string>((resolve) => {
+      const base64Promise = new Promise<string>((resolve, reject) => {
+        reader.onerror = () => reject(reader.error);
         reader.onloadend = () => {
           const base64 = (reader.result as string).split(",")[1];
           resolve(base64);
@@ -124,7 +139,7 @@ export function EmergencyReport() {
         <div className="flex items-center gap-2 text-sm text-gray-400 bg-gray-800 p-2 rounded">
           <MapPin size={16} className="text-red-600" />
           <span>Location: {location}</span>
-          <Button variant="ghost" size="sm" className="ml-auto text-xs h-6 px-2" onClick={detectLocation}>
+          <Button variant="ghost" size="sm" className="ml-auto text-xs h-6 px-2" onClick={detectLocation} aria-label="Refresh location">
             Refresh
           </Button>
         </div>
@@ -140,6 +155,7 @@ export function EmergencyReport() {
             )}
             onClick={isRecording ? stopRecording : startRecording}
             disabled={isProcessing}
+            aria-label={isProcessing ? "Analyzing voice report" : isRecording ? "Stop recording and send report" : "Start voice report"}
           >
             {isProcessing ? (
               <Loader2 className="animate-spin" size={32} />
@@ -149,25 +165,13 @@ export function EmergencyReport() {
               <Mic size={32} />
             )}
           </Button>
-          <span className="text-sm font-medium text-gray-300">
+          <span className="text-sm font-medium text-gray-300" role="status">
             {isProcessing ? "Analyzing Voice..." : isRecording ? "Stop & Report" : "Press to Speak"}
           </span>
         </div>
 
-        {/* Manual Fallback (Optional) */}
-        <div className="flex gap-2 border-t border-gray-800 pt-4">
-          <Button variant="outline" className="flex-1 text-xs h-8 border-gray-700">
-            Manual Report
-          </Button>
-          <Button variant="outline" className="flex-1 text-xs h-8 border-gray-700">
-            Request Help
-          </Button>
-        </div>
       </div>
     </Card>
   );
 }
 
-function cn(...inputs: any[]) {
-  return inputs.filter(Boolean).join(" ");
-}

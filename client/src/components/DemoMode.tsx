@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Play, Pause, RotateCcw, Volume2 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 
 export function DemoMode() {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -62,16 +63,21 @@ export function DemoMode() {
     },
   ];
 
-   const executedStepRef = React.useRef(-1);
+   const executedStepRef = useRef(-1);
 
   useEffect(() => {
-    let timer: NodeJS.Timeout;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     if (isPlaying && step < demoSteps.length) {
       const currentStep = demoSteps[step];
       
       if (executedStepRef.current !== step) {
         executedStepRef.current = step;
-        currentStep.action();
+        currentStep.action().catch((err: unknown) => {
+          console.error("[Demo] step failed", err);
+          toast.error("Demo step failed. Check the server connection.");
+          setIsPlaying(false);
+          executedStepRef.current = -1;
+        });
       }
       
       timer = setTimeout(() => {
@@ -82,7 +88,9 @@ export function DemoMode() {
       executedStepRef.current = -1;
     }
     return () => clearTimeout(timer);
-  }, [isPlaying, step, demoSteps]);
+    // demoSteps is rebuilt every render; step/isPlaying are the real triggers.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying, step]);
 
   const handleStart = () => {
     setStep(0);
@@ -92,18 +100,30 @@ export function DemoMode() {
   const handleReset = async () => {
     setIsPlaying(false);
     setStep(0);
+    executedStepRef.current = -1;
+    window.speechSynthesis?.cancel();
     setNarration("Demo reset.");
-    await clearAllIncidentsMutation.mutateAsync();
-    utils.emergency.getActiveIncidents.invalidate();
+    try {
+      await clearAllIncidentsMutation.mutateAsync();
+      utils.emergency.getActiveIncidents.invalidate();
+    } catch {
+      toast.error("Could not clear incidents");
+    }
   };
 
   // Simple text-to-speech for narration
   useEffect(() => {
-    if (narration && isPlaying) {
-      const utterance = new SpeechSynthesisUtterance(narration);
-      window.speechSynthesis.speak(utterance);
-    }
+    if (!narration || !isPlaying || !("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(new SpeechSynthesisUtterance(narration));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [narration]);
+
+  // Stop speaking on pause or unmount.
+  useEffect(() => {
+    if (!isPlaying) window.speechSynthesis?.cancel();
+    return () => window.speechSynthesis?.cancel();
+  }, [isPlaying]);
 
   return (
     <Card className="bg-gray-900 border-red-900/50 p-4 border-2">
@@ -131,7 +151,7 @@ export function DemoMode() {
       <div className="bg-black/50 rounded-lg p-4 min-h-[80px] border border-gray-800 flex items-start gap-3">
         <Volume2 className={cn("text-red-500 mt-1", isPlaying && "animate-bounce")} size={20} />
         <p className="text-gray-200 text-sm leading-relaxed italic">
-          {narration || "Ready to start the demo presentation. Press Play to begin."}
+          {narration || "Ready to start the demo presentation. Press Start to begin."}
         </p>
       </div>
 
@@ -152,6 +172,3 @@ export function DemoMode() {
   );
 }
 
-function cn(...inputs: any[]) {
-  return inputs.filter(Boolean).join(" ");
-}

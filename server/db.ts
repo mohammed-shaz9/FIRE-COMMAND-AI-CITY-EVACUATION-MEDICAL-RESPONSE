@@ -177,6 +177,12 @@ export async function updateResourceStatus(id: number, status: Resource["status"
   if (resource) resource.status = status;
 }
 
+/** Return demo entities to their initial state so a new FireCommand run starts clean. */
+export function resetSimulationEntities() {
+  for (const p of _vulnerablePeople) p.status = "safe";
+  for (const r of _resources) if (r.status === "deployed") r.status = "available";
+}
+
 // ============ SEEDING (Demo) ============
 
 export async function seedDemoData() {
@@ -284,8 +290,9 @@ export async function initializeCampusZones() {
       _campusZones.push({
         id: _campusZones.length + 1,
         name: `Zone-${x}-${y}`,
-        zoneX: x * cellSize,
-        zoneY: y * cellSize,
+        // Cell centres, in the same -250..250 world frame as incidents, exits and buildings
+        zoneX: (x - gridSize / 2) * cellSize + cellSize / 2,
+        zoneY: (y - gridSize / 2) * cellSize + cellSize / 2,
         zoneRadius: cellSize / 2,
         buildingName: null,
       });

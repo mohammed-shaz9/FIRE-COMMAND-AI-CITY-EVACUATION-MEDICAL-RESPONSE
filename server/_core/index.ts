@@ -9,7 +9,7 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { initSocket } from "./socket";
-import { startMonitorLoop } from "../agent/monitor";
+import { startMonitorLoop, stopMonitorLoop } from "../agent/monitor";
 import { seedDemoData } from "../db";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -86,9 +86,19 @@ async function startServer() {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
   }
 
+  const shutdown = () => {
+    stopMonitorLoop();
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 3000).unref();
+  };
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
+
   server.listen(port, "0.0.0.0", () => {
     console.log(`Server running on port ${port} (mode: ${process.env.NODE_ENV || 'development'})`);
   });
 }
+
+process.on("unhandledRejection", (reason) => console.error("[Server] Unhandled rejection:", reason));
 
 startServer().catch(console.error);

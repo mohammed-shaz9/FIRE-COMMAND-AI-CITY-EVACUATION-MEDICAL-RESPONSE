@@ -1,5 +1,6 @@
 import { Server as HttpServer } from "http";
 import { Server as SocketServer } from "socket.io";
+import { getFireCommandState } from "../db";
 
 let io: SocketServer | null = null;
 
@@ -13,6 +14,10 @@ export function initSocket(server: HttpServer) {
 
   io.on("connection", (socket) => {
     console.log("A user connected:", socket.id);
+
+    // Late joiners / page reloads get the current FireCommand state immediately
+    const state = getFireCommandState();
+    if (state) socket.emit("firecommand_update", state);
 
     socket.on("disconnect", () => {
       console.log("User disconnected:", socket.id);

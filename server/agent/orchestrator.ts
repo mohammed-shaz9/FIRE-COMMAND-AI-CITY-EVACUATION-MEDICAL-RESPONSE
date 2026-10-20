@@ -11,7 +11,7 @@
  *  6. BroadcastAgent → Craft emergency message for 700
  */
 
-import { invokeLLM } from "../_core/llm";
+import { invokeLLM, parseLLMJson } from "../_core/llm";
 
 // =============================================
 // AGENT 1: SensorFusion — Confirm fire
@@ -71,8 +71,7 @@ Analyze and confirm/deny fire. Return JSON.`,
 
   const content = response.choices[0]?.message?.content;
   if (!content) return { confirmed: true, confidence: 0.95, fire_type: "structural", reasoning: "Fallback: high smoke + temperature detected" };
-  const contentStr = typeof content === "string" ? content : JSON.stringify(content);
-  return JSON.parse(contentStr) as SensorFusionResult;
+  return parseLLMJson<SensorFusionResult>(content);
 }
 
 // =============================================
@@ -138,8 +137,7 @@ Predict spread direction, at-risk zones, and evacuation window. Return JSON.`,
 
   const content = response.choices[0]?.message?.content;
   if (!content) return { spread_direction: "South", evac_window_minutes: 15, risk_zones: ["Science Block", "Library"], reasoning: "Fallback prediction" };
-  const contentStr = typeof content === "string" ? content : JSON.stringify(content);
-  return JSON.parse(contentStr) as SpreadPredictionResult;
+  return parseLLMJson<SpreadPredictionResult>(content);
 }
 
 // =============================================
@@ -218,8 +216,7 @@ Prioritize these 4 routes and define the overall evacuation strategy. Return JSO
       reasoning: "LLM fallback: Standard protocol active.",
     };
   }
-  const contentStr = typeof content === "string" ? content : JSON.stringify(content);
-  return JSON.parse(contentStr) as EvacPlanResult;
+  return parseLLMJson<EvacPlanResult>(content);
 }
 
 // =============================================
@@ -279,8 +276,7 @@ Assign wave counts and recommend medical response. Return JSON.`,
 
   const content = response.choices[0]?.message?.content;
   if (!content) return { wave_1_critical: 8, wave_2_priority: 12, wave_3_standard: 13, medical_stations_needed: 3, reasoning: "Fallback triage" };
-  const contentStr = typeof content === "string" ? content : JSON.stringify(content);
-  return JSON.parse(contentStr) as TriageResult;
+  return parseLLMJson<TriageResult>(content);
 }
 
 // =============================================
@@ -371,8 +367,7 @@ Allocate resources optimally. Return JSON.`,
       reasoning: "Fallback allocation",
     };
   }
-  const contentStr = typeof content === "string" ? content : JSON.stringify(content);
-  return JSON.parse(contentStr) as AllocationResult;
+  return parseLLMJson<AllocationResult>(content);
 }
 
 // =============================================
@@ -442,6 +437,5 @@ Craft emergency broadcasts. Return JSON.`,
       urgency: "critical",
     };
   }
-  const contentStr = typeof content === "string" ? content : JSON.stringify(content);
-  return JSON.parse(contentStr) as BroadcastResult;
+  return parseLLMJson<BroadcastResult>(content);
 }

@@ -167,6 +167,18 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // Split heavy vendors so Home stays small and vendor chunks cache across deploys
+        manualChunks(id: string) {
+          if (!id.includes("node_modules")) return;
+          const has = (...pkgs: string[]) => pkgs.some((p) => id.includes(`node_modules/${p}/`));
+          if (has("three", "@react-three", "three-stdlib", "@pmndrs", "cannon-es")) return "vendor-three";
+          if (has("mapbox-gl", "@googlemaps")) return "vendor-maps";
+          if (has("jspdf", "html2canvas")) return "vendor-pdf";
+        },
+      },
+    },
   },
   server: {
     host: true,

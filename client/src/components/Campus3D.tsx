@@ -1,9 +1,8 @@
-import React, { useRef, useEffect, useState, useMemo } from 'react';
+import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls as OrbitControlsImpl, PerspectiveCamera as PerspectiveCameraImpl } from '@react-three/drei';
-import { Physics, useBox, useHeightfield } from '@react-three/cannon';
+import { Html, OrbitControls, PerformanceMonitor } from '@react-three/drei';
 import * as THREE from 'three';
-import type { Mesh } from 'three';
+import { FireEffect, GlowRoute } from './visualization/MRUBuilding3D';
 
 interface Building {
   name: string;
@@ -30,350 +29,218 @@ interface EvacuationRoute {
   severity?: string;
 }
 
-// Define MRUH campus buildings with positions matching the synthetic hill curve from pathfinding.ts
+type Zone = { x: number; y: number; severity: string };
+
+// MRUH campus buildings; x/z are scene metres on the same synthetic hill used by pathfinding.ts
 const CAMPUS_BUILDINGS: Building[] = [
-  { name: 'Engineering Block', x: -50, y: 0, z: -50, width: 60, height: 40, depth: 50, color: '#4a5568' }, // Bottom of hill
-  { name: 'Science Block', x: 200, y: 0, z: 200, width: 50, height: 35, depth: 45, color: '#2d3748' },    // Top of hill
-  { name: 'Library', x: 50, y: 0, z: 80, width: 40, height: 30, depth: 40, color: '#1a202c' },
+  { name: 'Engineering Block', x: -50, y: 0, z: -50, width: 60, height: 40, depth: 50, color: '#4a5568' },
+  { name: 'Science Block', x: 200, y: 0, z: 200, width: 50, height: 35, depth: 45, color: '#2d3748' },
+  { name: 'Library', x: 50, y: 0, z: 80, width: 40, height: 30, depth: 40, color: '#334155' },
   { name: 'Hostel A', x: -80, y: 0, z: 50, width: 45, height: 25, depth: 40, color: '#4a5568' },
-  { name: 'Medical Center', x: 120, y: 0, z: 80, width: 35, height: 20, depth: 35, color: '#742a2a' }, // On slope
-  { name: 'Admin Block', x: 0, y: 0, z: -80, width: 50, height: 25, depth: 40, color: '#3d3d3d' },
+  { name: 'Medical Center', x: 120, y: 0, z: 80, width: 35, height: 20, depth: 35, color: '#9b2c2c' },
+  { name: 'Admin Block', x: 0, y: 0, z: -80, width: 50, height: 25, depth: 40, color: '#52525b' },
 ];
 
-// Physics-enabled Building component
-function PhysicsBuilding({ building, terrainHeightAtBase }: { building: Building, terrainHeightAtBase: number }) {
-  // Building is static (mass = 0)
-  const [ref] = useBox<THREE.Mesh>(() => ({
-    type: 'Static',
-    mass: 0,
-    args: [building.width, building.height, building.depth],
-    position: [building.x, terrainHeightAtBase + building.height / 2, building.z]
-  }));
+const SPAN = 500; // terrain is 500 x 500 m centred on the origin (matches pathfinding grid +-250)
+const CELLS = 25;
+// Same slope as pathfinding.ts: 0 m at (-250,-250) rising to 40 m at (+250,+250)
+const elevAt = (x: number, z: number) => (THREE.MathUtils.clamp((x + 250) / SPAN, 0, 1) + THREE.MathUtils.clamp((z + 250) / SPAN, 0, 1)) * 20;
 
-  const [hovered, setHovered] = useState(false);
+const SEV: Record<string, string> = { critical: '#ff0000', warning: '#ff9900' };
+const sevColor = (s: string) => SEV[s] ?? '#00ff88';
+const ROUTE_COLORS = ['#ff003c', '#0dccf2', '#00ffaa', '#ff9900'];
 
-  return (
-    <mesh
-      ref={ref}
-      onPointerOver={() => setHovered(true)}
-      onPointerOut={() => setHovered(false)}
-      castShadow
-      receiveShadow
-    >
-      <boxGeometry args={[building.width, building.height, building.depth]} />
-      <meshStandardMaterial
-        color={building.color}
-        emissive={hovered ? '#ff0000' : '#000000'}
-        emissiveIntensity={hovered ? 0.3 : 0}
-      />
-    </mesh>
-  );
-}
-
-// Physics-Enabled Heightfield Terrain
-function PhysicsTerrain() {
-  const gridSize = 10;
-  const cellSize = 50;
-
-  // Generate heightfield data mapping pathfinding.ts logical elevation
-  const heights = useMemo(() => {
-    const data: number[][] = [];
-    for (let x = 0; x < gridSize; x++) {
-      const row: number[] = [];
-      for (let y = 0; y < gridSize; y++) {
-        const elevation = ((x + y) / (gridSize * 2 - 2)) * 40;
-        row.push(elevation);
-      }
-      data.push(row);
-    }
-    return data;
-  }, []);
-
-  const [ref] = useHeightfield<THREE.Mesh>(() => ({
-    args: [heights, { elementSize: cellSize }],
-    position: [-250, 0, 250], // Center offset for 500x500 grid
-    rotation: [-Math.PI / 2, 0, 0] // Cannon.js expects heightfield laid flat
-  }));
-
+function Terrain() {
   const geometry = useMemo(() => {
-    const size = (gridSize - 1) * cellSize;
-    // +1 because heightfield points are one larger than grid cells
-    const geom = new THREE.PlaneGeometry(size, size, gridSize - 1, gridSize - 1);
-    geom.rotateX(-Math.PI / 2);
-
-    const positions = geom.attributes.position.array;
-    for (let i = 0; i < positions.length; i += 3) {
-      const xIndex = Math.floor(i / 3) % gridSize;
-      const zIndex = Math.floor(Math.floor(i / 3) / gridSize);
-
-      // Mirror the height fetching
-      if (heights[xIndex] && heights[xIndex][gridSize - 1 - zIndex] !== undefined) {
-        positions[i + 1] = heights[xIndex][gridSize - 1 - zIndex];
-      }
+    const g = new THREE.PlaneGeometry(SPAN, SPAN, CELLS, CELLS);
+    g.rotateX(-Math.PI / 2);
+    const p = g.attributes.position;
+    const col = new Float32Array(p.count * 3);
+    const lo = new THREE.Color('#1f3d2a'), hi = new THREE.Color('#5b5a3c'), c = new THREE.Color();
+    for (let i = 0; i < p.count; i++) {
+      const h = elevAt(p.getX(i), p.getZ(i));
+      p.setY(i, h);
+      c.copy(lo).lerp(hi, h / 40); col.set([c.r, c.g, c.b], i * 3);
     }
-    geom.computeVertexNormals();
-    return geom;
-  }, [heights]);
-
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    g.computeVertexNormals();
+    return g;
+  }, []);
+  useEffect(() => () => geometry.dispose(), [geometry]);
   return (
-    <mesh receiveShadow position={[-250, 0, -250]}>
-      <primitive object={geometry} attach="geometry" />
-      <meshStandardMaterial color="#2d4c1e" wireframe={false} />
+    <mesh geometry={geometry} receiveShadow>
+      <meshStandardMaterial vertexColors roughness={0.95} flatShading />
     </mesh>
   );
 }
 
-
-function FireEffect({ position }: { position: [number, number, number] }) {
-  const pointsRef = useRef<THREE.Points>(null);
-  const smokeRef = useRef<THREE.Points>(null);
-  const fireCount = 800;
-  const smokeCount = 400;
-
-  const fireParticles = useMemo(() => {
-    const positions = new Float32Array(fireCount * 3);
-    const colors = new Float32Array(fireCount * 3);
-    const sizes = new Float32Array(fireCount);
-
-    const colorOptions = [
-      new THREE.Color('#ffcc00'),
-      new THREE.Color('#ff6600'),
-      new THREE.Color('#cc0000')
-    ];
-
-    for (let i = 0; i < fireCount; i++) {
-      positions[i * 3] = (Math.random() - 0.5) * 15;
-      positions[i * 3 + 1] = Math.random() * 25;
-      positions[i * 3 + 2] = (Math.random() - 0.5) * 15;
-      sizes[i] = Math.random() * 3 + 1;
-
-      const c = colorOptions[Math.floor(Math.random() * colorOptions.length)];
-      colors[i * 3] = c.r;
-      colors[i * 3 + 1] = c.g;
-      colors[i * 3 + 2] = c.b;
-    }
-    return { positions, colors, sizes };
-  }, [fireCount]);
-
-  const smokeParticles = useMemo(() => {
-    const positions = new Float32Array(smokeCount * 3);
-    const sizes = new Float32Array(smokeCount);
-    for (let i = 0; i < smokeCount; i++) {
-      positions[i * 3] = (Math.random() - 0.5) * 25;
-      positions[i * 3 + 1] = 15 + Math.random() * 30;
-      positions[i * 3 + 2] = (Math.random() - 0.5) * 25;
-      sizes[i] = Math.random() * 5 + 3;
-    }
-    return { positions, sizes };
-  }, [smokeCount]);
-
-  // Implement Wind Gravity effect on the fire particles
-  useFrame((state) => {
-    if (pointsRef.current) {
-      const positions = pointsRef.current.geometry.attributes.position.array as Float32Array;
-      for (let i = 0; i < fireCount; i++) {
-        positions[i * 3 + 1] += 0.2 + Math.random() * 0.2;
-
-        // Wind influence pushing particles to the +X direction
-        positions[i * 3] += 0.15 + Math.sin(state.clock.elapsedTime * 2 + i) * 0.1;
-
-        positions[i * 3 + 2] += Math.cos(state.clock.elapsedTime * 2 + i) * 0.1;
-
-        if (positions[i * 3 + 1] > 25) {
-          positions[i * 3 + 1] = 0;
-          positions[i * 3] = (Math.random() - 0.5) * 15;
-          positions[i * 3 + 2] = (Math.random() - 0.5) * 15;
-        }
-      }
-      pointsRef.current.geometry.attributes.position.needsUpdate = true;
-    }
-
-    if (smokeRef.current) {
-      const positions = smokeRef.current.geometry.attributes.position.array as Float32Array;
-      for (let i = 0; i < smokeCount; i++) {
-        positions[i * 3 + 1] += 0.1 + Math.random() * 0.1;
-
-        // Heavy wind spread for smoke
-        positions[i * 3] += 0.3 + Math.sin(state.clock.elapsedTime * 0.5 + i) * 0.15;
-
-        positions[i * 3 + 2] += Math.cos(state.clock.elapsedTime * 0.5 + i) * 0.15;
-
-        if (positions[i * 3 + 1] > 45) {
-          positions[i * 3 + 1] = 15;
-          positions[i * 3] = (Math.random() - 0.5) * 15;
-          positions[i * 3 + 2] = (Math.random() - 0.5) * 15;
-        }
-      }
-      smokeRef.current.geometry.attributes.position.needsUpdate = true;
-    }
-  });
-
+const BuildingMesh = memo(function BuildingMesh({ b }: { b: Building }) {
+  const [hov, setHov] = useState(false);
+  const y = elevAt(b.x, b.z);
   return (
-    <group position={position}>
-      <points ref={pointsRef}>
-        <bufferGeometry>
-          <bufferAttribute attach="attributes-position" args={[fireParticles.positions, 3]} />
-          <bufferAttribute attach="attributes-color" args={[fireParticles.colors, 3]} />
-        </bufferGeometry>
-        <pointsMaterial size={1.5} vertexColors transparent opacity={0.8} blending={THREE.AdditiveBlending} depthWrite={false} />
-      </points>
-      <points ref={smokeRef}>
-        <bufferGeometry>
-          <bufferAttribute attach="attributes-position" args={[smokeParticles.positions, 3]} />
-        </bufferGeometry>
-        <pointsMaterial size={4} color="#333333" transparent opacity={0.4} depthWrite={false} />
-      </points>
+    <group position={[b.x, y + b.height / 2, b.z]}>
+      <mesh castShadow receiveShadow onPointerOver={(e) => { e.stopPropagation(); setHov(true); }} onPointerOut={() => setHov(false)}>
+        <boxGeometry args={[b.width, b.height, b.depth]} />
+        <meshStandardMaterial color={b.color} metalness={0.3} roughness={0.55} emissive={hov ? '#0dccf2' : '#000000'} emissiveIntensity={hov ? 0.35 : 0} />
+      </mesh>
+      <Html position={[0, b.height / 2 + 6, 0]} center zIndexRange={[10, 0]} style={{ pointerEvents: 'none' }}>
+        <div className={`whitespace-nowrap text-[9px] font-bold tracking-wider px-1.5 py-0.5 border bg-black/70 ${hov ? 'text-white border-[#0dccf2]' : 'text-[#0dccf2]/80 border-white/10'}`}>
+          {b.name}{hov ? ` · ${b.height} m tall · ground ${Math.round(y)} m ASL (sim.)` : ''}
+        </div>
+      </Html>
+    </group>
+  );
+});
+
+function Zones({ zones }: { zones: Zone[] }) {
+  const ref = useRef<THREE.InstancedMesh>(null);
+  const n = Math.min(zones.length, 400);
+  useLayoutEffect(() => {
+    const m = ref.current; if (!m) return;
+    const d = new THREE.Object3D(), c = new THREE.Color();
+    for (let k = 0; k < n; k++) {
+      const z = zones[k];
+      d.position.set(z.x, elevAt(z.x, z.y) + 1, z.y); d.rotation.set(-Math.PI / 2, 0, 0); d.updateMatrix();
+      m.setMatrixAt(k, d.matrix); m.setColorAt(k, c.set(sevColor(z.severity)));
+    }
+    m.count = n; m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true;
+  }, [zones, n]);
+  if (!n) return null;
+  return (
+    <instancedMesh ref={ref} args={[undefined, undefined, 400]} frustumCulled={false}>
+      <planeGeometry args={[50, 50]} />
+      <meshBasicMaterial transparent opacity={0.35} toneMapped={false} depthWrite={false} />
+    </instancedMesh>
+  );
+}
+
+function IncidentMarker({ incident }: { incident: Incident }) {
+  const ref = useRef<THREE.Mesh>(null);
+  useFrame((s) => {
+    const m = ref.current; if (!m) return;
+    m.rotation.y = s.clock.elapsedTime * 1.2;
+    m.scale.setScalar(1 + Math.sin(s.clock.elapsedTime * 4) * 0.15);
+  });
+  const color = sevColor(incident.severity);
+  const y = elevAt(incident.locationX, incident.locationY);
+  return (
+    <group position={[incident.locationX, y, incident.locationY]}>
+      <mesh ref={ref} position={[0, 20, 0]}>
+        <icosahedronGeometry args={[7, 1]} />
+        <meshBasicMaterial color={color} wireframe toneMapped={false} />
+      </mesh>
+      <Html position={[0, 34, 0]} center zIndexRange={[10, 0]} style={{ pointerEvents: 'none' }}>
+        <div className="whitespace-nowrap text-[9px] font-black tracking-widest px-1.5 py-0.5 bg-black/80 border" style={{ color, borderColor: color }}>
+          {incident.type.toUpperCase()} · {incident.severity.toUpperCase()}
+        </div>
+      </Html>
+      {incident.type === 'fire' && <FireEffect position={[0, 0.5, 0]} level={incident.severity === 'critical' ? 1 : 0.6} wind={[0.3, 0.05]} low={false} />}
     </group>
   );
 }
 
-function IncidentMarker({ incident, elevation }: { incident: Incident, elevation: number }) {
-  const meshRef = useRef<Mesh>(null);
-
-  useFrame(() => {
-    if (meshRef.current) {
-      meshRef.current.rotation.y += 0.02;
-      meshRef.current.scale.z = 1 + Math.sin(Date.now() / 500) * 0.2;
-    }
-  });
-
-  const color = incident.severity === 'critical' ? '#ff0000' : incident.severity === 'warning' ? '#ff9900' : '#ffff00';
-
-  return (
-    <mesh ref={meshRef} position={[incident.locationX, elevation + 15, incident.locationY]}>
-      <sphereGeometry args={[8, 16, 16]} />
-      <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.8} wireframe={true} />
-    </mesh>
-  );
+function Route({ route, index }: { route: EvacuationRoute; index: number }) {
+  const pts = useMemo(() => (route.path ?? []).map(p => new THREE.Vector3(p.x, elevAt(p.x, p.y) + 4, p.y)), [route]);
+  if (pts.length < 2) return null;
+  return <GlowRoute points={pts} color={ROUTE_COLORS[index % ROUTE_COLORS.length]} active />;
 }
 
-function PhysicsEvacuationPath({ route, index }: { route: EvacuationRoute; index: number }) {
-  const lineRef = useRef<any>(null);
-
+function Atmosphere() {
+  const { scene } = useThree();
   useEffect(() => {
-    if (lineRef.current && route.path && route.path.length > 0) {
-      // Offset Y based on elevation logic mapped from pathfinder calculations 
-      const points = route.path.map(p => {
-        const gridXRatio = Math.max(0, Math.min(1, (p.x + 250) / 500));
-        const gridZRatio = Math.max(0, Math.min(1, (p.y + 250) / 500));
-        const elevation = (gridXRatio + gridZRatio) * 20;
-        return new THREE.Vector3(p.x, elevation + 5, p.y);
-      });
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      lineRef.current.geometry = geometry;
-    }
-  }, [route]);
+    const bg = scene.background, fog = scene.fog;
+    scene.background = new THREE.Color('#020617');
+    scene.fog = new THREE.Fog('#020617', 500, 1400);
+    return () => { scene.background = bg; scene.fog = fog; };
+  }, [scene]);
+  return null;
+}
 
-  // Different colors for multiple routes (SDG 11)
-  const colors = ["#ff003c", "#0dccf2", "#00ffaa", "#ff9900"];
-  const color = colors[index % colors.length];
-
+function Legend({ zones, incidents, routes }: { zones: number; incidents: number; routes: number }) {
+  const [open, setOpen] = useState(false);
+  const row = (c: string, t: string, d: string, line = false) => (
+    <div className="flex gap-2 items-start">
+      <span className="mt-[3px] shrink-0" style={line ? { width: 14, borderTop: `2px dashed ${c}` } : { width: 9, height: 9, background: c + '66', border: `1px solid ${c}` }} />
+      <span><b style={{ color: c }}>{t}</b> <span className="text-slate-400">{d}</span></span>
+    </div>
+  );
   return (
-    <line ref={lineRef}>
-      <bufferGeometry />
-      <lineBasicMaterial color={color} linewidth={6} transparent opacity={0.8} />
-    </line>
+    <div className="absolute top-2 right-2 z-10 font-mono text-[10px] text-slate-200 flex flex-col items-end gap-1">
+      <button className="px-2 py-1 bg-black/80 border border-[#0dccf2]/40 text-[#0dccf2] font-bold tracking-widest" aria-expanded={open} onClick={() => setOpen(o => !o)}>{open ? 'HIDE GUIDE' : 'HOW TO READ'}</button>
+      {open && (
+        <div className="w-[230px] max-w-[80vw] bg-black/85 border border-white/10 p-2.5 space-y-1.5">
+          <p className="text-[#0dccf2] font-black tracking-widest">CAMPUS TWIN</p>
+          <p className="text-slate-400 leading-snug">Terrain rises 0 to 40 m toward the north-east corner (same slope the evacuation pathfinder uses). Boxes are campus buildings; hover for height.</p>
+          {row('#ff0000', 'Critical zone', 'heat tile, high severity')}
+          {row('#ff9900', 'Warning zone', 'heat tile, medium')}
+          {row('#00ff88', 'Safe zone', 'heat tile, low')}
+          {row('#ff003c', 'Incident', 'spinning marker; flames for fire')}
+          {row('#0dccf2', 'Evacuation route', 'animated dashes, one colour per route', true)}
+          <p className="text-slate-500">{incidents} incident(s) · {zones} zone(s) · {routes} route(s). Drag orbit, scroll zoom.</p>
+        </div>
+      )}
+    </div>
   );
 }
 
-function PhysicsHeatmapGrid({ zones }: { zones: Array<{ x: number; y: number; severity: string }> }) {
+class Boundary extends React.Component<{ children: React.ReactNode }, { err: boolean }> {
+  state = { err: false };
+  static getDerivedStateFromError() { return { err: true }; }
+  render() {
+    return this.state.err
+      ? <div className="w-full h-full flex items-center justify-center text-[11px] text-slate-400 bg-[#020617]">3D campus unavailable (WebGL failed to start).</div>
+      : this.props.children;
+  }
+}
+
+function CampusScene({ incidents, evacuationRoutes, zones }: { incidents: Incident[]; evacuationRoutes: EvacuationRoute[]; zones: Zone[] }) {
   return (
     <>
-      {zones.map((zone, idx) => {
-        // Adjust Y pos roughly based on slope
-        const gridXRatio = Math.max(0, Math.min(1, (zone.x + 250) / 500));
-        const gridZRatio = Math.max(0, Math.min(1, (zone.y + 250) / 500));
-        const elevation = (gridXRatio + gridZRatio) * 20;
-
-        const color = zone.severity === 'critical' ? '#ff0000' : zone.severity === 'warning' ? '#ff9900' : '#00ff00';
-        return (
-          <mesh key={idx} position={[zone.x, elevation + 1, zone.y]} rotation={[-Math.PI / 2, 0, 0]}>
-            <planeGeometry args={[50, 50]} />
-            <meshStandardMaterial color={color} transparent={true} opacity={0.3} emissive={color} emissiveIntensity={0.4} />
-          </mesh>
-        );
-      })}
+      <Atmosphere />
+      <hemisphereLight args={['#8fb8ff', '#0a1020', 0.7]} />
+      <directionalLight position={[250, 300, 150]} intensity={1.5} castShadow shadow-mapSize={[2048, 2048]} shadow-bias={-0.0005} shadow-normalBias={0.5}
+        shadow-camera-left={-300} shadow-camera-right={300} shadow-camera-top={300} shadow-camera-bottom={-300} shadow-camera-near={10} shadow-camera-far={900} />
+      <Terrain />
+      {CAMPUS_BUILDINGS.map((b) => <BuildingMesh key={b.name} b={b} />)}
+      <Zones zones={zones} />
+      {incidents.map((i) => <IncidentMarker key={i.id} incident={i} />)}
+      {evacuationRoutes.map((r, k) => <Route key={k} route={r} index={k} />)}
     </>
-  );
-}
-
-
-function CampusScene({
-  incidents,
-  evacuationRoutes,
-  zones,
-}: {
-  incidents: Incident[];
-  evacuationRoutes: EvacuationRoute[];
-  zones: Array<{ x: number; y: number; severity: string }>;
-}) {
-  const { camera } = useThree();
-
-  useEffect(() => {
-    camera.position.set(250, 200, 250);
-    camera.lookAt(0, 0, 0);
-  }, [camera]);
-
-  return (
-    <Physics gravity={[0, -9.81, 0]}>
-      {/* Lighting */}
-      <ambientLight intensity={0.6} />
-      <directionalLight position={[200, 300, 200]} castShadow intensity={1.5} shadow-mapSize={[2048, 2048]} />
-      <pointLight position={[0, 100, 0]} intensity={0.5} />
-
-      {/* Real Physics Terrain matching the A* Navigation Mesh */}
-      <PhysicsTerrain />
-
-      {/* Campus buildings pinned onto the Terrain slope */}
-      {CAMPUS_BUILDINGS.map((building) => {
-        // Determine synthetic base terrain height for the building's coordinates
-        const gridXRatio = Math.max(0, Math.min(1, (building.x + 250) / 500));
-        const gridZRatio = Math.max(0, Math.min(1, (building.z + 250) / 500));
-        const elevation = (gridXRatio + gridZRatio) * 20;
-        return <PhysicsBuilding key={building.name} building={building} terrainHeightAtBase={elevation} />;
-      })}
-
-      <PhysicsHeatmapGrid zones={zones} />
-
-      {incidents.map((incident) => {
-        const gridXRatio = Math.max(0, Math.min(1, (incident.locationX + 250) / 500));
-        const gridZRatio = Math.max(0, Math.min(1, (incident.locationY + 250) / 500));
-        const elevation = (gridXRatio + gridZRatio) * 20;
-
-        return (
-          <React.Fragment key={incident.id}>
-            <IncidentMarker incident={incident} elevation={elevation} />
-            {incident.type === 'fire' && <FireEffect position={[incident.locationX, elevation, incident.locationY]} />}
-          </React.Fragment>
-        );
-      })}
-
-      {evacuationRoutes.map((route, idx) => (
-        <PhysicsEvacuationPath key={idx} route={route} index={idx} />
-      ))}
-
-      <OrbitControlsImpl enableZoom={true} enablePan={true} enableRotate={true} autoRotate={false} maxPolarAngle={Math.PI / 2.2} />
-    </Physics>
   );
 }
 
 interface Campus3DProps {
   incidents: Incident[];
   evacuationRoutes?: EvacuationRoute[];
-  zones?: Array<{ x: number; y: number; severity: string }>;
+  zones?: Zone[];
 }
 
-export function Campus3D({
-  incidents,
-  evacuationRoutes = [],
-  zones = [],
-}: Campus3DProps) {
+export function Campus3D({ incidents, evacuationRoutes = [], zones = [] }: Campus3DProps) {
+  const wrap = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(true);
+  const [dpr, setDpr] = useState(1.75);
+  const controls = useRef<any>(null);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  useEffect(() => {
+    const el = wrap.current; if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(([e]) => setVisible(e.isIntersecting), { threshold: 0.01 });
+    io.observe(el);
+    return () => { io.disconnect(); clearTimeout(timer.current); };
+  }, []);
+
   return (
-    <div style={{ width: '100%', height: '100%', minHeight: '600px' }}>
-      <Canvas shadows>
-        <PerspectiveCameraImpl makeDefault position={[250, 200, 250]} fov={60} />
-        <CampusScene incidents={incidents} evacuationRoutes={evacuationRoutes} zones={zones} />
-      </Canvas>
+    <div ref={wrap} style={{ width: '100%', height: '100%', minHeight: '600px', position: 'relative' }}>
+      <Boundary>
+        <Canvas shadows dpr={[1, dpr]} frameloop={visible ? 'always' : 'never'} camera={{ position: [320, 240, 320], fov: 50, near: 1, far: 3000 }} gl={{ antialias: true, powerPreference: 'high-performance' }}>
+          <PerformanceMonitor onDecline={() => setDpr(1)} />
+          <CampusScene incidents={incidents} evacuationRoutes={evacuationRoutes} zones={zones} />
+          <OrbitControls ref={controls} target={[0, 20, 0]} enableDamping minDistance={80} maxDistance={900} maxPolarAngle={Math.PI / 2.1} autoRotate autoRotateSpeed={0.3}
+            onStart={() => { clearTimeout(timer.current); if (controls.current) controls.current.autoRotate = false; }}
+            onEnd={() => { clearTimeout(timer.current); timer.current = setTimeout(() => { if (controls.current) controls.current.autoRotate = true; }, 6000); }} />
+        </Canvas>
+      </Boundary>
+      <Legend zones={zones.length} incidents={incidents.length} routes={evacuationRoutes.length} />
     </div>
   );
 }

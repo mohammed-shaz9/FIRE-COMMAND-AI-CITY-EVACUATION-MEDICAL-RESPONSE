@@ -1,45 +1,44 @@
-import React from "react";
-import { AlertTriangle, X } from "lucide-react";
+import { useEffect } from "react";
+import { AlertTriangle } from "lucide-react";
 import { useSocket } from "@/contexts/SocketContext";
 import { trpc } from "@/lib/trpc";
-import { Button } from "@/components/ui/button";
 
 export function AlertBanner() {
   const { data: activeIncidents } = trpc.emergency.getActiveIncidents.useQuery();
-  
-  const criticalIncidents = activeIncidents?.filter(i => i.severity === 'critical') || [];
+  const { socket } = useSocket();
+  const utils = trpc.useUtils();
 
+  // Keep the banner in sync with live incidents instead of waiting for a refetch.
+  useEffect(() => {
+    if (!socket) return;
+    const refresh = () => utils.emergency.getActiveIncidents.invalidate();
+    socket.on("new_incident", refresh);
+    socket.on("incident_resolved", refresh);
+    return () => {
+      socket.off("new_incident", refresh);
+      socket.off("incident_resolved", refresh);
+    };
+  }, [socket, utils]);
+
+  const criticalIncidents = activeIncidents?.filter(i => i.severity === "critical") ?? [];
   if (criticalIncidents.length === 0) return null;
 
   return (
-    <div className="bg-red-600 text-white py-2 px-4 flex items-center justify-between animate-pulse">
-      <div className="flex items-center gap-3 overflow-hidden">
-        <AlertTriangle className="flex-shrink-0" size={20} />
-        <div className="flex gap-4 animate-marquee whitespace-nowrap">
-          {criticalIncidents.map((incident, idx) => (
-            <span key={incident.id} className="font-bold">
-              CRITICAL {incident.type.toUpperCase()} AT {(incident.buildingName || "UNKNOWN").toUpperCase()}
-              {idx < criticalIncidents.length - 1 && " | "}
-            </span>
-          ))}
-        </div>
+    <div
+      role="alert"
+      className="flex items-center justify-between gap-3 bg-red-700 px-4 py-2 text-white"
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <AlertTriangle className="shrink-0" size={20} aria-hidden="true" />
+        <p className="truncate text-sm font-bold uppercase">
+          {criticalIncidents
+            .map(i => `Critical ${i.type} at ${i.buildingName || "unknown location"}`)
+            .join(" | ")}
+        </p>
       </div>
-      <div className="flex items-center gap-2 ml-4">
-        <span className="text-xs font-bold bg-white text-red-600 px-2 py-0.5 rounded">
-          {criticalIncidents.length} ACTIVE
-        </span>
-      </div>
-      
-      <style>{`
-        @keyframes marquee {
-          0% { transform: translateX(0); }
-          100% { transform: translateX(-50%); }
-        }
-        .animate-marquee {
-          display: inline-block;
-          animation: marquee 20s linear infinite;
-        }
-      `}</style>
+      <span className="shrink-0 rounded bg-white px-2 py-0.5 text-xs font-bold text-red-700">
+        {criticalIncidents.length} ACTIVE
+      </span>
     </div>
   );
 }
