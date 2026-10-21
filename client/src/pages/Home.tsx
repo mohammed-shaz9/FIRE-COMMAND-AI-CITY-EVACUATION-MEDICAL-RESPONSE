@@ -114,7 +114,13 @@ export default function Home() {
     },
     onError: (err) => {
       console.error("[FireCommand Error]", err);
-      toast.error(`Trigger failed: ${err.message || "server unreachable"}`);
+      // A static host with no backend answers /api/trpc with index.html, which fails JSON parsing
+      const noBackend = /unexpected token|<!doctype|failed to fetch|networkerror|not valid json/i.test(err.message || "");
+      toast.error(
+        noBackend
+          ? "Backend not reachable. The AI/simulation server must be deployed and VITE_BACKEND_URL set at build time."
+          : `Trigger failed: ${err.message || "server unreachable"}`,
+      );
     },
   });
 

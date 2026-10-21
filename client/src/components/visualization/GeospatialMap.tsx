@@ -2,16 +2,16 @@ import React, { useRef } from 'react';
 import { Map as MapIcon, Maximize2, ExternalLink } from 'lucide-react';
 
 export function GeospatialMap({ isCritical = false }: { isCritical?: boolean } = {}) {
-  // MRU Campus Coordinates
-  const lat = 17.5583;
-  const lng = 78.4300;
+  // Resolve the place by name (Google geocodes it), so no hand-typed coordinates can drift off campus
+  const place = "Malla Reddy University, Maisammaguda, Hyderabad";
+  const q = encodeURIComponent(place);
   const box = useRef<HTMLDivElement>(null);
 
   // Embed API when a key exists; otherwise the keyless satellite embed (a missing key used to load an error page)
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   const mapUrl = apiKey
-    ? `https://www.google.com/maps/embed/v1/place?key=${apiKey}&q=Malla+Reddy+University,Hyderabad&zoom=17&maptype=satellite`
-    : `https://maps.google.com/maps?q=${lat},${lng}&t=k&z=17&output=embed`;
+    ? `https://www.google.com/maps/embed/v1/place?key=${apiKey}&q=${q}&zoom=17&maptype=satellite`
+    : `https://maps.google.com/maps?q=${q}&t=k&z=17&output=embed`;
   const goFull = () => { box.current?.requestFullscreen?.().catch(() => {}); };
 
   return (
@@ -25,7 +25,7 @@ export function GeospatialMap({ isCritical = false }: { isCritical?: boolean } =
             <Maximize2 size={14} />
           </button>
           <a 
-            href={`https://www.google.com/maps/@${lat},${lng},18z/data=!3m1!1e3`} 
+            href={`https://www.google.com/maps/search/?api=1&query=${q}`}
             target="_blank" 
             rel="noopener noreferrer"
             aria-label="Open in Google Maps"
