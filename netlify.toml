@@ -1,0 +1,18 @@
+# Netlify hosts the static client only. The Express/Socket.io/tRPC backend must run elsewhere
+# (Railway, see railway.json) and be reachable via VITE_BACKEND_URL, set as a Netlify env var BEFORE building.
+[build]
+  command = "npm run build:client"
+  publish = "dist/public"
+
+[build.environment]
+  NODE_VERSION = "22"
+  # Vite 7 + peer-dep conflicts (see .npmrc)
+  NPM_FLAGS = "--legacy-peer-deps"
+  # VITE_* values are public by design (bundled into client JS); stop Netlify's secret scanner failing the build on them
+  SECRETS_SCAN_ENABLED = "false"
+
+# SPA fallback so /command-center and /how-it-works work on refresh
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
