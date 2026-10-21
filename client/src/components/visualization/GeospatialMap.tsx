@@ -62,8 +62,7 @@ export function GeospatialMap({ isCritical = false }: { isCritical?: boolean } =
 
         {/* HUD Data Overlay */}
         <div className="absolute bottom-2 left-2 bg-black/80 p-2 border border-[#00ffaa]/30 text-[8px] cyber-text text-[#00ffaa] z-20">
-          LAT: {lat} N<br/>
-          LNG: {lng} E<br/>
+          PLACE: Malla Reddy University<br/>
           VIEW: SATELLITE (Google Maps)
         </div>
       </div>
