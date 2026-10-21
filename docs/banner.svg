@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" role="img" aria-label="FireCommand: AI Incident Commander">
+  <defs>
+    <radialGradient id="r" cx="12%" cy="0%" r="70%"><stop offset="0" stop-color="#ff003c" stop-opacity=".35"/><stop offset="1" stop-color="#ff003c" stop-opacity="0"/></radialGradient>
+    <radialGradient id="c" cx="92%" cy="10%" r="60%"><stop offset="0" stop-color="#0dccf2" stop-opacity=".30"/><stop offset="1" stop-color="#0dccf2" stop-opacity="0"/></radialGradient>
+    <linearGradient id="t" x1="0" x2="1"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#0dccf2"/></linearGradient>
+    <pattern id="g" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity=".05"/></pattern>
+  </defs>
+  <rect width="1200" height="360" fill="#020617"/>
+  <rect width="1200" height="360" fill="url(#g)"/>
+  <rect width="1200" height="360" fill="url(#r)"/>
+  <rect width="1200" height="360" fill="url(#c)"/>
+  <path d="M96 118c10 38 56 60 56 112a50 50 0 0 1-100 0c0-20 10-34 22-46 2 18 12 26 20 28-4-30 2-56 2-94z" fill="#ff003c"/>
+  <path d="M110 232c0 16-12 28-26 28s-18-10-18-20c0-12 12-18 16-30 8 6 28 8 28 22z" fill="#ff9900"/>
+  <text x="190" y="170" font-family="Space Grotesk,Inter,Arial,sans-serif" font-size="76" font-weight="700" fill="url(#t)">FireCommand</text>
+  <text x="192" y="214" font-family="Inter,Arial,sans-serif" font-size="26" fill="#cbd5e1">AI Incident Commander for campus fire emergencies</text>
+  <g font-family="JetBrains Mono,Consolas,monospace" font-size="15" letter-spacing="2">
+    <text x="192" y="262" fill="#0dccf2">MONITOR</text><text x="285" y="262" fill="#64748b">&#8594;</text>
+    <text x="312" y="262" fill="#a855f7">PREDICT</text><text x="405" y="262" fill="#64748b">&#8594;</text>
+    <text x="432" y="262" fill="#ff9900">DECIDE</text><text x="510" y="262" fill="#64748b">&#8594;</text>
+    <text x="537" y="262" fill="#00ffaa">EVACUATE</text>
+  </g>
+  <text x="192" y="310" font-family="JetBrains Mono,Consolas,monospace" font-size="13" fill="#64748b" letter-spacing="2">SDG 11 · SDG 13 · SDG 3  |  HACKATHON 2026  |  SIMULATED PROTOTYPE</text>
+</svg>

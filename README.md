@@ -1,8 +1,59 @@
+<p align="center"><img src="docs/banner.svg" alt="FireCommand: AI Incident Commander" width="100%"></p>
+
+<p align="center">
+  <img alt="React 19" src="https://img.shields.io/badge/React-19-0dccf2?style=for-the-badge&labelColor=020617">
+  <img alt="Vite 7" src="https://img.shields.io/badge/Vite-7-a855f7?style=for-the-badge&labelColor=020617">
+  <img alt="Tailwind 4" src="https://img.shields.io/badge/Tailwind-4-0dccf2?style=for-the-badge&labelColor=020617">
+  <img alt="Three.js" src="https://img.shields.io/badge/Three.js-3D_twin-00ffaa?style=for-the-badge&labelColor=020617">
+  <img alt="Gemini" src="https://img.shields.io/badge/Gemini-multi--agent-ff9900?style=for-the-badge&labelColor=020617">
+  <img alt="Socket.io" src="https://img.shields.io/badge/Socket.io-realtime-ff003c?style=for-the-badge&labelColor=020617">
+</p>
+
 # FireCommand: AI Incident Commander for MRUH
 
 Multi-agent AI system that detects a campus fire, predicts its spread, plans evacuation routes, dispatches responders, broadcasts alerts and tracks evacuee health, all on a live 3D digital twin of the MRUH campus. Built for Hackathon 2026, aligned with UN SDG 11, 13 and 3.
 
 > **Status: hackathon prototype.** Everything runs on a *simulated* campus (simulated sensors, occupancy and fire). It is not a certified life-safety system. See [Known limitations](#13-known-limitations-and-handoff-notes) before building on it.
+
+---
+
+## UI / UX at a glance
+
+**Design language:** dark "emergency command" console. Near-black navy surfaces, fire-red for danger, cyan for interaction, green for safe routes, amber for warnings, violet for AI. Space Grotesk headings, Inter body, JetBrains Mono for logs and numbers.
+
+| Token | Colour | Meaning |
+|---|---|---|
+| `fc-bg` | ![](https://img.shields.io/badge/-%20%20%20-020617?style=flat-square) `#020617` | Page |
+| `fc-cyan` | ![](https://img.shields.io/badge/-%20%20%20-0dccf2?style=flat-square) `#0dccf2` | Interactive, monitoring |
+| `fc-red` | ![](https://img.shields.io/badge/-%20%20%20-ff003c?style=flat-square) `#ff003c` | Fire, critical |
+| `fc-green` | ![](https://img.shields.io/badge/-%20%20%20-00ffaa?style=flat-square) `#00ffaa` | Safe, routes |
+| `fc-amber` | ![](https://img.shields.io/badge/-%20%20%20-ff9900?style=flat-square) `#ff9900` | Warning, smoke |
+| `fc-violet` | ![](https://img.shields.io/badge/-%20%20%20-a855f7?style=flat-square) `#a855f7` | AI agents |
+
+**User journey**
+
+```mermaid
+flowchart LR
+  A[Landing<br/>hero + simulated console] --> B[Scroll story<br/>spark to safe evacuation]
+  B --> C[How it works<br/>7 agents, 3 SDGs]
+  A --> D[Command Center]
+  C --> D
+  D --> E{Trigger fire}
+  E --> F[3D twin: fire, smoke,<br/>glowing routes]
+  E --> G[Agent log + phase tracker]
+  E --> H[Routes, dispatch,<br/>broadcast, triage]
+  H --> I[PDF report]
+```
+
+**UX principles used throughout**
+
+- **Explain what you see.** The 3D twin ships a "How to read" legend and a hover/tap info panel; everything simulated is labelled as simulated.
+- **Never dead-end.** No API key, no map token, no WebGL, no texture: each degrades to a fallback message instead of a crash.
+- **Calm motion.** Transform and opacity only; scroll story is driven purely by scroll position; `prefers-reduced-motion` gets a static end state.
+- **Accessible by default.** 11 px minimum text, labelled controls, `role="log"` / `role="alert"`, skip link, keyboard-reachable, pinch-zoom allowed.
+- **Mobile first.** 16 px gutters, no horizontal scroll, command panels stack above the 3D view on phones.
+
+Details: [section 9 (frontend)](#9-frontend) and [section 10 (design system and CSS)](#10-design-system-and-css).
 
 ---
 
