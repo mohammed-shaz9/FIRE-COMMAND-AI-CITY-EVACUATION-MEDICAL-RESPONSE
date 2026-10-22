@@ -36,7 +36,11 @@ export function startMonitorLoop() {
   if (_timer) return; // idempotent: no duplicate loops
   console.log("[FireCommand] Starting AI Agent orchestration loop...");
 
-  _timer = setInterval(async () => {
+  _timer = setInterval(tickOnce, 2000); // 2-second tick
+}
+
+// One orchestration tick. Exported so serverless hosts (no long-lived timer) can drive it on demand.
+export async function tickOnce() {
     if (_busy) return;
     _busy = true;
     try {
@@ -442,5 +446,4 @@ export function startMonitorLoop() {
     } finally {
       _busy = false;
     }
-  }, 2000); // 2-second tick
-}
+  }

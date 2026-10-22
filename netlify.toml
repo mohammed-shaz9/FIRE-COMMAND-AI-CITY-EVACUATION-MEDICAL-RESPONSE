@@ -11,8 +11,20 @@
   # VITE_* values are public by design (bundled into client JS); stop Netlify's secret scanner failing the build on them
   SECRETS_SCAN_ENABLED = "false"
 
+# Backend: tRPC runs as a Netlify Function (same origin as the client, no VITE_BACKEND_URL needed)
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api"
+  status = 200
+  force = true
+
 # SPA fallback so /command-center and /how-it-works work on refresh
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
+
